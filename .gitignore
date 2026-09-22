@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Sekrety i dane lokalne gcalsync — zawsze poza repozytorium.
+# Aplikacja trzyma je w katalogu użytkownika; te wpisy chronią przed przypadkowym
+# wskazaniem katalogu wewnątrz repo (GCALSYNC_HOME).
+client_secret*.json
+credentials*.json
+token*.json
+.gcalsync/
+gcalsync-data/
+
+# Edytory / system
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
