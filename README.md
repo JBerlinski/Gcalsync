@@ -3,8 +3,8 @@
 Lokalna aplikacja do synchronizacji planu zajęć WAT (eksport CSV „w formacie Outlooka”
 z ewig) z Google Calendar. Plan projektu i decyzje: [docs/PLAN.md](docs/PLAN.md).
 
-Stan: gotowy podgląd w wierszu poleceń (parsowanie, reguły wykluczeń, deduplikacja,
-konflikty). Integracja z Google Calendar i UI — w kolejnych etapach.
+Stan: podgląd, zapisana konfiguracja, logowanie do Google, tworzenie kalendarza i **dry-run**
+synchronizacji. Zapis zdarzeń do kalendarza (etap 6) i UI (etap 7) — jeszcze nie.
 
 ## Wymagania
 
@@ -12,41 +12,72 @@ konflikty). Integracja z Google Calendar i UI — w kolejnych etapach.
   i zależności. Instalacja na Windows (PowerShell):
   `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
 
-## Podgląd planu (CLI)
+Wszystkie polecenia uruchamiasz w katalogu repozytorium: `uv run gcalsync …`.
 
-Kolejność plików to priorytet: **pierwszy plik jest najważniejszy** i wygrywa w konfliktach.
-Podgląd niczego nie zapisuje.
-
-PowerShell / cmd, w katalogu repozytorium:
+## Dane lokalne (poza repozytorium)
 
 ```
-uv run gcalsync preview "C:\ścieżka\kierunkowa.txt" "C:\ścieżka\domyslna.txt" ^
-    --names "Grupa kierunkowa" "Grupa domyślna" ^
-    --exclude-course "Modelowanie danych do BIM"
+uv run gcalsync paths
 ```
 
-(`^` to kontynuacja linii w cmd; w PowerShell użyj `` ` `` albo wpisz wszystko w jednej linii.)
+pokazuje (i tworzy) katalog danych aplikacji. Na Windows to `%LOCALAPPDATA%\gcalsync`, czyli
+`C:\Users\<nazwa>\AppData\Local\gcalsync`. Są w nim: `client_secret.json` (kładziesz sam),
+`token.json` (po zalogowaniu), `config.json` (źródła, reguły, ustawienia, kalendarz),
+`files\` (kopie wgranych CSV) i `runs\` (dziennik synchronizacji). Zmienna środowiskowa
+`GCALSYNC_HOME` pozwala wskazać inny katalog.
 
-Opcje:
+## Konfiguracja źródeł i reguł
 
-| Opcja | Znaczenie |
+Kolejność źródeł to priorytet: **pierwsze jest najważniejsze** i wygrywa w konfliktach.
+
+```
+uv run gcalsync sources add "C:\ścieżka\kierunkowa.txt" --name "Grupa kierunkowa"
+uv run gcalsync sources add "C:\ścieżka\domyslna.txt" --name "Grupa domyślna"
+uv run gcalsync rules add --course "Modelowanie danych do BIM"
+uv run gcalsync preview
+```
+
+| Polecenie | Znaczenie |
 |---|---|
-| `--names N1 N2 …` | nazwy źródeł w kolejności plików (domyślnie nazwy plików) |
-| `--exclude-course PRZEDMIOT` | wyklucz przedmiot o dokładnie tej nazwie (bez typu i numeru), bez rozróżniania wielkości liter; można powtarzać |
-| `--exclude-contains TEKST` | wyklucz zdarzenia, których temat zawiera tekst |
-| `--exclude-regex WZORZEC` | wyklucz zdarzenia, których temat pasuje do wyrażenia regularnego |
-| `--encoding KODOWANIE` | wymuś kodowanie plików (domyślnie wykrywane: UTF-8, cp1250 lub ISO-8859-2) |
-| `--policy keep-all` | nie rozstrzygaj konfliktów priorytetem, tylko je pokaż |
-| `--json PLIK` | zapisz pełny podgląd jako JSON (UTF-8) |
+| `sources` / `sources add PLIK --name N` | lista / nowe źródło (kopia pliku trafia do katalogu danych) |
+| `sources replace NAZWA PLIK` | podmiana pliku (np. nowy eksport z ewig), priorytet bez zmian |
+| `sources move NAZWA POZYCJA` | zmiana priorytetu (1 = najważniejsze) |
+| `sources remove NAZWA` | usunięcie źródła i kopii pliku |
+| `rules add --course P` / `--contains T` / `--regex W` | wyklucz: przedmiot równy / temat zawiera / temat pasuje do wzorca |
+| `rules add --field F --op O --value V` | pełna postać (pola: subject, course, kind, location; operatory: contains, equals, regex) |
+| `rules add … --source NAZWA --from RRRR-MM-DD --to RRRR-MM-DD --case-sensitive` | zawężenia reguły |
+| `rules`, `rules remove NR`, `rules enable NR`, `rules disable NR` | lista i zmiany reguł |
+| `settings --title-template "{course} ({kind})"` | szablon tytułu; pola: `{course} {kind} {seq} {subject} {location}` |
+| `preview` | podgląd zapisanej konfiguracji (`--json PLIK` zapisuje pełny wynik) |
 
-Kod wyjścia: `0` — podgląd bez błędów, `1` — w plikach są błędy (synchronizacja byłaby
-zablokowana), `2` — błędne wywołanie.
+Podgląd jednorazowy bez zapisywania konfiguracji: `gcalsync preview PLIK1 PLIK2 --names N1 N2
+--exclude-course "…"`.
 
-Raport pokazuje: źródła (kodowanie, zakres dat, przedmioty), reguły z liczbą trafień,
-wykluczone zdarzenia, scalone duplikaty z rozbieżnościami, konflikty rozwiązane priorytetem,
-kolizje pozostawione jako ostrzeżenia, błędy i ostrzeżenia parsera, listę zdarzeń do kalendarza
-(z offsetem strefy czasowej, np. `+02:00` przed i `+01:00` po zmianie czasu) oraz okno pokrycia
-plików.
+## Google Calendar
+
+1. Skopiuj plik klienta OAuth (typ „Desktop app”) jako `client_secret.json` do katalogu danych
+   (`gcalsync paths` pokazuje pełną ścieżkę).
+2. `uv run gcalsync login` — otwiera przeglądarkę z ekranem zgody Google. Aplikacja prosi tylko
+   o zakres `calendar.app.created`: może tworzyć własne kalendarze i zarządzać zdarzeniami
+   wyłącznie w nich — nie widzi Twojego głównego kalendarza.
+3. `uv run gcalsync calendar create` — tworzy **pusty** kalendarz „Plan WAT” (strefa
+   Europe/Warsaw) i zapisuje jego ID w `config.json`.
+4. `uv run gcalsync sync` — **dry-run**: pokazuje, co zostałoby dodane, zmienione i usunięte.
+   Niczego nie zapisuje.
+
+Pozostałe: `calendar` (sprawdzenie), `calendar forget`, `calendar use ID`, `logout`.
+
+Zasady bezpieczeństwa synchronizacji: zmieniane są tylko zdarzenia z własnym znacznikiem
+gcalsync; zakończone zajęcia są pomijane; usuwane mogą być tylko zdarzenia mieszczące się
+w oknie pokrycia wgranych plików. Szczegóły: [docs/PLAN.md](docs/PLAN.md), sekcja 5.
+
+**Tryb publikacji w Google Cloud:** w trybie *Testing* token wygasa po 7 dniach (potwierdzone
+w dokumentacji Google) — wtedy `gcalsync login` ponownie. W trybie *In production* bez
+weryfikacji (dozwolone do użytku osobistego, z ekranem „unverified app”) dokumentacja nie
+wymienia limitu 7 dni, ale też nie mówi wprost, że go nie ma.
+
+Kody wyjścia: `0` — OK, `1` — błędy w plikach CSV, `2` — błędne wywołanie lub konfiguracja,
+`3` — błąd logowania lub Google API.
 
 ## Rozwój
 
@@ -58,3 +89,5 @@ uv run ruff format --check .
 
 Test „złoty” (`tests/golden/samples_bim_excluded.json`) utrwala wynik potoku na plikach
 z `samples/`. Po świadomej zmianie wyniku: `UPDATE_GOLDEN=1 uv run pytest tests/test_pipeline.py`.
+Integracja z Google jest testowana na atrapie (`tests/fake_calendar.py`) i na
+`HttpMockSequence` z google-api-python-client — testy nie łączą się z siecią.

@@ -6,17 +6,28 @@ import argparse
 import json
 import sys
 from collections import Counter
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
 from gcalsync import __version__
-from gcalsync.app import preview_from_config
+from gcalsync.app import (
+    build_sync_preview,
+    create_calendar,
+    preview_from_config,
+    require_calendar,
+    use_calendar,
+)
 from gcalsync.core.merge import ConflictPolicy
 from gcalsync.core.pipeline import PreviewResult, build_preview
 from gcalsync.core.rules import FIELD_LABELS, OPERATOR_LABELS, ExclusionRule, RuleError
+from gcalsync.gcal.auth import AuthError, load_credentials, login, logout
+from gcalsync.gcal.client import CalendarApi, GoogleApiError, GoogleCalendarApi
 from gcalsync.report import preview_to_dict, render_text
 from gcalsync.sources.outlook_csv import CsvFileSource
 from gcalsync.storage import (
+    DEFAULT_CALENDAR_NAME,
     Config,
     ConfigError,
     Paths,
@@ -30,10 +41,12 @@ from gcalsync.storage import (
     set_rule_enabled,
     validate_title_template,
 )
+from gcalsync.sync_report import render_sync_text
 
 EXIT_OK = 0
 EXIT_FILE_ERRORS = 1
 EXIT_USAGE = 2
+EXIT_GOOGLE = 3
 
 
 class CliError(Exception):
@@ -160,6 +173,37 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         p = rules_sub.add_parser(action, help=help_text)
         p.add_argument("number", type=int, metavar="NR", help="numer z: gcalsync rules list")
+
+    # Google
+    login = sub.add_parser("login", help="zaloguj się do Google (otwiera przeglądarkę)")
+    login.add_argument(
+        "--no-browser", action="store_true", help="nie otwieraj przeglądarki, tylko wypisz adres"
+    )
+    sub.add_parser("logout", help="usuń zapisany token Google z tego komputera")
+
+    calendar = sub.add_parser("calendar", help="kalendarz docelowy w Google")
+    calendar_sub = calendar.add_subparsers(dest="action", metavar="AKCJA")
+    calendar_sub.add_parser("status", help="pokaż i sprawdź kalendarz docelowy (domyślnie)")
+    c_create = calendar_sub.add_parser(
+        "create", help="utwórz nowy, pusty kalendarz dodatkowy w Google i ustaw go jako docelowy"
+    )
+    c_create.add_argument("--name", default=DEFAULT_CALENDAR_NAME, metavar="NAZWA")
+    c_use = calendar_sub.add_parser(
+        "use", help="ustaw istniejący kalendarz utworzony wcześniej przez gcalsync (po ID)"
+    )
+    c_use.add_argument("calendar_id", metavar="ID")
+    calendar_sub.add_parser(
+        "forget", help="zapomnij kalendarz docelowy (w Google nic nie jest usuwane)"
+    )
+
+    sub.add_parser(
+        "sync",
+        help="DRY-RUN: pokaż, co zostałoby dodane, zmienione i usunięte w kalendarzu",
+        description=(
+            "Porównuje stan docelowy z zapisanej konfiguracji z kalendarzem Google i pokazuje "
+            "plan zmian. Niczego nie zapisuje."
+        ),
+    )
 
     # settings
     settings = sub.add_parser("settings", help="pokaż lub zmień ustawienia")
@@ -386,16 +430,98 @@ def cmd_settings(args: argparse.Namespace, paths: Paths) -> int:
     return EXIT_OK
 
 
-COMMANDS = {
-    "preview": cmd_preview,
-    "paths": cmd_paths,
-    "sources": cmd_sources,
-    "rules": cmd_rules,
-    "settings": cmd_settings,
+@dataclass
+class Context:
+    paths: Paths
+    api_factory: Callable[[Paths], CalendarApi]
+
+    def api(self) -> CalendarApi:
+        return self.api_factory(self.paths)
+
+
+def google_api(paths: Paths) -> CalendarApi:
+    return GoogleCalendarApi(load_credentials(paths))
+
+
+def cmd_login(args: argparse.Namespace, ctx: Context) -> int:
+    login(ctx.paths, open_browser=not args.no_browser)
+    print(f"Zalogowano. Token zapisany w: {ctx.paths.token}")
+    return EXIT_OK
+
+
+def cmd_logout(args: argparse.Namespace, ctx: Context) -> int:
+    if logout(ctx.paths):
+        print(f"Usunięto token: {ctx.paths.token}")
+    else:
+        print("Nie było zapisanego tokenu.")
+    print(
+        "Dostęp aplikacji możesz też całkowicie odwołać na koncie Google: "
+        "https://myaccount.google.com/connections"
+    )
+    return EXIT_OK
+
+
+def cmd_calendar(args: argparse.Namespace, ctx: Context) -> int:
+    config = load_config(ctx.paths)
+    action = args.action or "status"
+    if action == "forget":
+        if config.calendar is None:
+            print("Kalendarz docelowy nie był ustawiony.")
+        else:
+            print(
+                f"Zapomniano kalendarz „{config.calendar.summary}” ({config.calendar.id}). "
+                "W Google nic nie zostało usunięte."
+            )
+            config.calendar = None
+            save_config(ctx.paths, config)
+        return EXIT_OK
+    if action == "status":
+        if config.calendar is None:
+            print("Kalendarz docelowy nie jest ustawiony. Utwórz: gcalsync calendar create")
+            return EXIT_OK
+        calendar = require_calendar(config, ctx.api())
+        print(f"Kalendarz docelowy: „{calendar.summary}” ({calendar.id}) — dostępny.")
+        return EXIT_OK
+    if action == "create":
+        calendar = create_calendar(ctx.paths, config, ctx.api(), args.name)
+        print(f"Utworzono pusty kalendarz „{calendar.summary}” ({calendar.id}).")
+        print("Nie dodano do niego żadnych zdarzeń. Podgląd zmian: gcalsync sync")
+        return EXIT_OK
+    calendar = use_calendar(ctx.paths, config, ctx.api(), args.calendar_id)
+    print(f"Ustawiono kalendarz docelowy: „{calendar.summary}” ({calendar.id}).")
+    return EXIT_OK
+
+
+def cmd_sync(args: argparse.Namespace, ctx: Context) -> int:
+    config = load_config(ctx.paths)
+    api = ctx.api() if config.calendar is not None else None
+    sync = build_sync_preview(ctx.paths, config, api)
+    sys.stdout.write(render_sync_text(sync))
+    return EXIT_FILE_ERRORS if sync.preview.has_errors else EXIT_OK
+
+
+def _with_paths(handler: Callable[[argparse.Namespace, Paths], int]):
+    return lambda args, ctx: handler(args, ctx.paths)
+
+
+COMMANDS: dict[str, Callable[[argparse.Namespace, Context], int]] = {
+    "preview": _with_paths(cmd_preview),
+    "paths": _with_paths(cmd_paths),
+    "sources": _with_paths(cmd_sources),
+    "rules": _with_paths(cmd_rules),
+    "settings": _with_paths(cmd_settings),
+    "login": cmd_login,
+    "logout": cmd_logout,
+    "calendar": cmd_calendar,
+    "sync": cmd_sync,
 }
 
 
-def main(argv: list[str] | None = None, paths: Paths | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    paths: Paths | None = None,
+    api_factory: Callable[[Paths], CalendarApi] = google_api,
+) -> int:
     # Konsola Windows lub przekierowanie do pliku mogą nie obsługiwać wszystkich znaków.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -407,11 +533,15 @@ def main(argv: list[str] | None = None, paths: Paths | None = None) -> int:
     if handler is None:
         parser.print_help()
         return EXIT_OK
+    ctx = Context(paths=paths or Paths.default(), api_factory=api_factory)
     try:
-        return handler(args, paths or Paths.default())
+        return handler(args, ctx)
     except (CliError, ConfigError) as exc:
         print(f"Błąd: {exc}", file=sys.stderr)
         return EXIT_USAGE
+    except (AuthError, GoogleApiError) as exc:
+        print(f"Błąd Google: {exc}", file=sys.stderr)
+        return EXIT_GOOGLE
 
 
 if __name__ == "__main__":

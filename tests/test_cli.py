@@ -173,3 +173,146 @@ def test_settings(capsys, paths):
     out = capsys.readouterr().out
     assert "{course} [{kind}]" in out
     assert "nie ustawiony" in out
+
+
+# --- Google (etap 5): kalendarz i dry-run -------------------------------------------------
+
+
+@pytest.fixture
+def fake_api():
+    from fake_calendar import FakeCalendarApi
+
+    return FakeCalendarApi()
+
+
+def run_google(paths, api, *argv):
+    return main(list(argv), paths=paths, api_factory=lambda _paths: api)
+
+
+def configure_samples(paths):
+    run(paths, "sources", "add", str(NEW_GROUP), "--name", "Grupa kierunkowa")
+    run(paths, "sources", "add", str(DEFAULT_GROUP), "--name", "Grupa domyślna")
+    run(paths, "rules", "add", "--course", "Modelowanie danych do BIM")
+
+
+def test_sync_without_calendar_needs_no_google(capsys, paths):
+    configure_samples(paths)
+    capsys.readouterr()
+
+    def no_google(_paths):
+        raise AssertionError("dry-run bez kalendarza nie może łączyć się z Google")
+
+    assert main(["sync"], paths=paths, api_factory=no_google) == 0
+    out = capsys.readouterr().out
+    assert "Nie utworzono jeszcze kalendarza" in out
+    assert "=== Do dodania (75) ===" in out
+    assert "Zapis byłby zablokowany: kalendarz docelowy nie jest utworzony" in out
+    assert "DRY-RUN" in out
+
+
+def test_calendar_create_and_dry_run_against_it(capsys, paths, fake_api):
+    configure_samples(paths)
+    assert run_google(paths, fake_api, "calendar", "create") == 0
+    out = capsys.readouterr().out
+    assert "Utworzono pusty kalendarz „Plan WAT”" in out
+    [cal_id] = fake_api.calendars
+    assert fake_api.calendars[cal_id]["timeZone"] == "Europe/Warsaw"
+    assert fake_api.events[cal_id] == {}
+
+    assert run_google(paths, fake_api, "sync") == 0
+    out = capsys.readouterr().out
+    assert cal_id in out
+    assert "=== Do dodania (75) ===" in out
+    assert "+ 2026-10-01 (cz) 09:50–11:25 +02:00  Seminarium dyplomowe (S)  sala: 18 58" in out
+    assert "+ 2026-10-30 (pt) 08:00–09:35 +01:00  Analizy teledetekcyjne (w)  sala: A 59" in out
+    assert "Zapis byłby zablokowany" not in out
+    # Dry-run tylko czyta.
+    assert fake_api.events[cal_id] == {}
+    assert not any(c.startswith(("insert", "patch", "delete")) for c in fake_api.calls)
+
+
+def test_dry_run_shows_updates_deletes_and_ignores_foreign_events(capsys, paths, fake_api):
+    from gcalsync.app import build_sync_preview
+    from gcalsync.storage import load_config
+
+    configure_samples(paths)
+    run_google(paths, fake_api, "calendar", "create")
+    [cal_id] = fake_api.calendars
+    # Stan „po synchronizacji”: wszystkie docelowe zdarzenia są już w kalendarzu.
+    config = load_config(paths)
+    for planned in build_sync_preview(paths, config, fake_api).plan.adds:
+        fake_api.put_event(cal_id, planned.body)
+    # Ręczna zmiana sali w jednym zdarzeniu i własne zdarzenie użytkownika.
+    first = next(iter(fake_api.events[cal_id].values()))
+    first["location"] = "999 99"
+    fake_api.events[cal_id]["own"] = {
+        "id": "own",
+        "summary": "Prywatne",
+        "start": {"dateTime": "2026-10-05T10:00:00+02:00"},
+        "end": {"dateTime": "2026-10-05T11:00:00+02:00"},
+    }
+    capsys.readouterr()
+    assert run_google(paths, fake_api, "sync") == 0
+    out = capsys.readouterr().out
+    assert "=== Do dodania (0) ===" in out
+    assert "=== Do zmiany (1) ===" in out
+    assert "sala: „999 99” -> „18 58”" in out
+    assert "=== Bez zmian: 74 ===" in out
+    assert "inne 1 (nigdy nie są ruszane)" in out
+
+    # Bez pliku grupy kierunkowej okno pokrycia kończy się 18.12: usuwane są tylko zajęcia
+    # z Analiz mieszczące się w oknie, późniejsze zostają nietknięte.
+    run(paths, "sources", "remove", "Grupa kierunkowa")
+    capsys.readouterr()
+    assert run_google(paths, fake_api, "sync") == 0
+    out = capsys.readouterr().out
+    assert "=== Do usunięcia (16) ===" in out
+    assert "poza oknem (nie są ruszane): 14" in out
+    assert "Okno synchronizacji (pokrycie plików): 2026-10-01 09:50 – 2026-12-18 13:15" in out
+
+
+def test_calendar_status_forget_and_use(capsys, paths, fake_api):
+    assert run_google(paths, fake_api, "calendar") == 0
+    assert "nie jest ustawiony" in capsys.readouterr().out
+    run_google(paths, fake_api, "calendar", "create", "--name", "Plan testowy")
+    [cal_id] = fake_api.calendars
+    assert run_google(paths, fake_api, "calendar", "status") == 0
+    assert "„Plan testowy”" in capsys.readouterr().out
+    assert run_google(paths, fake_api, "calendar", "create") == 2
+    assert "już ustawiony" in capsys.readouterr().err
+    assert run_google(paths, fake_api, "calendar", "forget") == 0
+    assert run_google(paths, fake_api, "calendar", "use", "nie-ma") == 2
+    assert run_google(paths, fake_api, "calendar", "use", cal_id) == 0
+    assert "Ustawiono kalendarz docelowy" in capsys.readouterr().out
+
+
+def test_sync_with_deleted_calendar_is_clear_error(capsys, paths, fake_api):
+    configure_samples(paths)
+    run_google(paths, fake_api, "calendar", "create")
+    fake_api.calendars.clear()
+    assert run_google(paths, fake_api, "sync") == 2
+    assert "nie istnieje" in capsys.readouterr().err
+
+
+def test_sync_with_calendar_but_not_logged_in(capsys, paths, fake_api):
+    configure_samples(paths)
+    run_google(paths, fake_api, "calendar", "create")
+    capsys.readouterr()
+    assert run(paths, "sync") == 3  # prawdziwa fabryka API, brak token.json
+    assert "Nie zalogowano. Uruchom: gcalsync login" in capsys.readouterr().err
+
+
+def test_login_without_client_secret(capsys, paths):
+    assert run(paths, "login") == 3
+    err = capsys.readouterr().err
+    assert "client_secret.json" in err
+    assert "Desktop app" in err
+
+
+def test_logout(capsys, paths):
+    paths.root.mkdir(parents=True)
+    paths.token.write_text("{}")
+    assert run(paths, "logout") == 0
+    assert not paths.token.exists()
+    assert run(paths, "logout") == 0
+    assert "Nie było zapisanego tokenu" in capsys.readouterr().out

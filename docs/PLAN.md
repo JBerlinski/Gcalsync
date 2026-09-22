@@ -3,8 +3,8 @@
 Lokalna aplikacja z UI do synchronizacji planu zajęć WAT (eksport CSV „w formacie
 Outlooka” z ewig) z Google Calendar.
 
-Status: plan zaakceptowany. Etapy 1–3 w realizacji; po etapie 3 przerwa na weryfikację
-podglądu CLI na prawdziwych plikach, zanim ruszy integracja z Google.
+Status: etapy 1–5 zrealizowane (podgląd CLI zweryfikowany na Windows na prawdziwych
+plikach). Przerwa: dry-run na prawdziwym kalendarzu przed etapem 6 (zapis).
 
 Oznaczenia: **[zweryfikowane]** — potwierdzone w oficjalnej dokumentacji lub w plikach;
 **[niepotwierdzone]** — wniosek/pamięć, do sprawdzenia przy implementacji.
@@ -70,9 +70,10 @@ tests/
 docs/PLAN.md
 ```
 
-**Dane lokalne poza repozytorium** — `platformdirs.user_config_dir("gcalsync")`
-(Windows: `%APPDATA%\gcalsync` lub `%LOCALAPPDATA%\…` — dokładna ścieżka zależy od
-`platformdirs`, zostanie wypisana przez aplikację), nadpisywalne zmienną `GCALSYNC_HOME`:
+**Dane lokalne poza repozytorium** — `platformdirs.user_config_dir("gcalsync",
+appauthor=False, roaming=False)`; na Windows `%LOCALAPPDATA%\gcalsync`, czyli
+`C:\Users\<nazwa>\AppData\Local\gcalsync` [zweryfikowane w kodzie platformdirs];
+`gcalsync paths` wypisuje faktyczną ścieżkę. Nadpisywalne zmienną `GCALSYNC_HOME`:
 `client_secret.json`, `token.json`, `config.json` (źródła, priorytety, reguły, ID kalendarza,
 szablon tytułu), `files/` (kopie wgranych CSV — decyzja: tak, nigdy w repo), `runs/*.jsonl`
 (dziennik). `.gitignore` dodatkowo wyklucza sekrety i tokeny.
@@ -89,8 +90,10 @@ Event: source_id, row, subject_raw, course, kind, seq, location_raw, location, s
   Bez `[n]` (numeracja może się przesunąć), bez lokalizacji (zmiana sali = aktualizacja),
   bez źródła (zmiana pliku/priorytetu nie zmienia zdarzenia w kalendarzu).
 - Przeniesienie zajęć na inny termin = usunięcie + dodanie.
-- **Hash treści** (etap 5) liczony z faktycznych pól zdarzenia w Google (tytuł, lokalizacja,
-  opis, start, koniec) → wykrywa też ręczne edycje; w v1 synchronizacja je nadpisuje.
+- **Wykrywanie zmian** (etap 5): porównanie pól faktycznego zdarzenia w Google (tytuł, sala,
+  opis, początek i koniec w UTC) z docelowymi — zamiast zapisanego hasha, więc wykrywa też
+  ręczne edycje; w v1 synchronizacja je nadpisuje. Przypomnienia nie są porównywane
+  (`reminders.useDefault = true` ustawiane tylko przy dodaniu).
 
 **Tytuł** z szablonu (ustawienia), domyślnie `{course} ({kind})`, np. `Geowizualizacja (L)`;
 dla tematu bez typu — sam przedmiot. Numer `[n]`, pełny temat i źródło trafiają do opisu.
@@ -105,7 +108,8 @@ Kolejność: parsowanie → wykluczenia → deduplikacja → konflikty → stan 
   typ / lokalizacja), operator (zawiera / równa się / regex), wielkość liter (domyślnie
   ignorowana), zakres źródeł (domyślnie wszystkie), opcjonalny zakres dat, włączona/wyłączona.
   Każde wykluczone zdarzenie pamięta regułę. Porównania po normalizacji białych znaków (NFC).
-  Reguła domyślna (decyzja): **przedmiot równa się „Modelowanie danych do BIM”, wszystkie źródła**.
+  Reguła (decyzja): **przedmiot równa się „Modelowanie danych do BIM”, wszystkie źródła** —
+  nie jest wbudowana, dodaje się ją raz: `gcalsync rules add --course "Modelowanie danych do BIM"`.
 - **Deduplikacja:** grupowanie po kluczu; zostaje egzemplarz ze źródła o najwyższym priorytecie
   (w obrębie jednego pliku — pierwszy wiersz); raport „występuje też w…” i rozbieżności pól.
 - **Konflikty** (nakładanie `a.start < b.end && b.start < a.end`; stykanie się to nie kolizja):
@@ -139,20 +143,28 @@ calendars, and see, create, change, and delete events on them”; autoryzuje `ca
 `calendars.get`; `calendar.calendarlist.readonly` nie jest dodawany (decyzja).
 
 **Znacznik:** `extendedProperties.private = {gcalsync_managed: "1", gcalsync_key, gcalsync_v: "1"}`.
-Pobieranie przez `events.list?privateExtendedProperty=gcalsync_managed=1` [zweryfikowane].
+Odczyt: `events.list` (singleEvents, bez usuniętych, strony po 2500) całego kalendarza
+i podział lokalny na zarządzane / niezarządzane — dzięki temu podgląd pokazuje też liczbę
+zdarzeń niezarządzanych. (Filtr `privateExtendedProperty` jest dostępny [zweryfikowane],
+ale nie jest potrzebny.)
 Limity: klucz ≤ 44 znaki, wartość ≤ 1024, ≤ 300 właściwości / 32 kB [zweryfikowane].
 Zdarzenia bez znacznika — nigdy nie modyfikowane, tylko liczone w podglądzie.
 
 **Synchronizacja przyrostowa:** D = stan docelowy, C = zarządzane zdarzenia w Google.
 Dodaj D−C, zaktualizuj różne treścią, usuń C−D, usuń nadmiarowe duplikaty klucza w C.
 
-**Zakres, w którym aplikacja może cokolwiek zmieniać** (decyzje 6 i 7):
+**Zakres, w którym aplikacja może cokolwiek zmieniać** (decyzje 6 i 7, zaakceptowane):
 - zdarzenia zakończone (`end ≤ teraz`) są poza synchronizacją — nie są dodawane, zmieniane
   ani usuwane;
 - usuwać/zmieniać wolno tylko zarządzane zdarzenia mieszczące się w **oknie pokrycia**
   wgranych plików: od najwcześniejszego początku do najpóźniejszego końca wśród
   wszystkich sparsowanych zdarzeń (także wykluczonych). Zdarzenia poza oknem zostają
-  nietknięte. Okno jest pokazywane w podglądzie.
+  nietknięte. Okno jest pokazywane w podglądzie;
+- duplikaty (ten sam klucz więcej niż raz) są usuwane tylko w tym samym zakresie; zostaje
+  egzemplarz, który już ma docelową treść;
+- zarządzane zdarzenie ze znacznikiem bez klucza jest raportowane i nieruszane;
+- reguły ograniczone wyłącznie do usuwanego źródła są usuwane razem z nim (zamiast stać się
+  globalnymi).
 
 **Pola zdarzenia:** `summary` (szablon), `location`, `description` (przedmiot, typ, numer,
 temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
@@ -170,7 +182,12 @@ temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
   Tempo ok. 5 zapytań/s, ponawianie przy 403/429 (rate limit) i 5xx. Dokładne wartości
   `reason` w odpowiedziach błędów [niepotwierdzone] — obsługa oprze się na kodzie HTTP
   i sprawdzi `reason`, gdy jest dostępny;
-- bezpiecznik: usunięcie ponad X% zarządzanych zdarzeń → dodatkowe potwierdzenie;
+- bezpiecznik: co najmniej 5 usunięć nieaktualnych zdarzeń i ponad 30% zarządzanych
+  zdarzeń w zakresie → ostrzeżenie w dry-run i dodatkowe potwierdzenie przy zapisie;
+- odczyty: wbudowane `num_retries` google-api-python-client — ponawia 5xx, 429, 403
+  z `rateLimitExceeded`/`userRateLimitExceeded` i błędy połączenia, z wykładniczym
+  opóźnieniem [zweryfikowane w kodzie biblioteki]; `calendars.insert` bez ponawiania
+  (ryzyko utworzenia dwóch kalendarzy);
 - `invalid_grant` → komunikat „zaloguj się ponownie”;
 - **dry-run domyślnie**; zapis tylko po potwierdzeniu (UI) lub z `--apply` (CLI).
 
@@ -235,12 +252,13 @@ temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
 
 ## 9. Etapy (commity na jednej gałęzi)
 
-1. Szkielet: `pyproject.toml` (uv), ruff, pytest, `.gitignore`, README.
-2. Model + parser CSV z heurystyką kodowania + testy na próbkach.
-3. Reguły, deduplikacja, konflikty, potok, CLI `gcalsync preview` (bez Google), test złoty.
+1. ✅ Szkielet: `pyproject.toml` (uv), ruff, pytest, `.gitignore`, README.
+2. ✅ Model + parser CSV z heurystyką kodowania + testy na próbkach.
+3. ✅ Reguły, deduplikacja, konflikty, potok, CLI `gcalsync preview` (bez Google), test złoty.
    **Przerwa: weryfikacja podglądu CLI na prawdziwych plikach.**
-4. Trwała konfiguracja (źródła, priorytety, reguły, szablon tytułu, kopie CSV).
-5. Google: OAuth, utworzenie/wybór kalendarza, odczyt, diff (dry-run na prawdziwym kalendarzu).
+4. ✅ Trwała konfiguracja (źródła, priorytety, reguły, szablon tytułu, kopie CSV).
+5. ✅ Google: OAuth, utworzenie/wybór kalendarza, odczyt, diff (dry-run).
+   **Przerwa: dry-run na prawdziwym kalendarzu przed zapisem.**
 6. Wykonanie planu: dziennik, retry/backoff, bezpiecznik, testy na FakeCalendar.
 7. UI NiceGUI (ekrany 1–5).
 8. Dopracowanie: README z OAuth, `start.bat`.
