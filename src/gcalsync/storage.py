@@ -263,20 +263,32 @@ def _store_copy(paths: Paths, source_id: str, data: bytes) -> str:
     return rel
 
 
-def add_source(
-    paths: Paths, config: Config, file: Path, name: str, encoding: str | None = None
+def _check_name(config: Config, name: str, *, exclude: SourceConfig | None = None) -> str:
+    name = " ".join(name.split())
+    if not name:
+        raise ConfigError("Nazwa źródła nie może być pusta.")
+    if any(s.name == name and s is not exclude for s in config.sources):
+        raise ConfigError(f"Źródło „{name}” już istnieje.")
+    return name
+
+
+def add_source_data(
+    paths: Paths,
+    config: Config,
+    data: bytes,
+    filename: str,
+    name: str,
+    encoding: str | None = None,
 ) -> SourceConfig:
-    if any(s.name == name for s in config.sources):
-        raise ConfigError(f"Źródło „{name}” już istnieje. Użyj: gcalsync sources replace.")
-    data = file.read_bytes()
+    """Dodaje źródło z zawartości pliku (np. wgranej w przeglądarce) na koniec listy."""
+    name = _check_name(config, name)
     source_id = _new_source_id(config)
-    csv = CsvFileSource(id=source_id, name=name, data=data)
     source = SourceConfig(
         id=source_id,
         name=name,
         file=_store_copy(paths, source_id, data),
-        original_filename=file.name,
-        sha256=csv.sha256,
+        original_filename=filename,
+        sha256=CsvFileSource(id=source_id, name=name, data=data).sha256,
         added=datetime.now(UTC).isoformat(timespec="seconds"),
         encoding=encoding,
     )
@@ -284,16 +296,39 @@ def add_source(
     return source
 
 
-def replace_source_file(
-    paths: Paths, config: Config, name: str, file: Path, encoding: str | None = None
+def add_source(
+    paths: Paths, config: Config, file: Path, name: str, encoding: str | None = None
 ) -> SourceConfig:
+    return add_source_data(paths, config, file.read_bytes(), file.name, name, encoding)
+
+
+def replace_source_data(
+    paths: Paths,
+    config: Config,
+    name: str,
+    data: bytes,
+    filename: str,
+    encoding: str | None = None,
+) -> SourceConfig:
+    """Podmienia plik źródła; id, nazwa i priorytet zostają bez zmian."""
     source = config.source_by_name(name)
-    data = file.read_bytes()
     source.file = _store_copy(paths, source.id, data)
-    source.original_filename = file.name
+    source.original_filename = filename
     source.sha256 = CsvFileSource(id=source.id, name=name, data=data).sha256
     source.added = datetime.now(UTC).isoformat(timespec="seconds")
     source.encoding = encoding
+    return source
+
+
+def replace_source_file(
+    paths: Paths, config: Config, name: str, file: Path, encoding: str | None = None
+) -> SourceConfig:
+    return replace_source_data(paths, config, name, file.read_bytes(), file.name, encoding)
+
+
+def rename_source(config: Config, name: str, new_name: str) -> SourceConfig:
+    source = config.source_by_name(name)
+    source.name = _check_name(config, new_name, exclude=source)
     return source
 
 

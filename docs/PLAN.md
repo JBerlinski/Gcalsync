@@ -3,9 +3,9 @@
 Lokalna aplikacja z UI do synchronizacji planu zajęć WAT (eksport CSV „w formacie
 Outlooka” z ewig) z Google Calendar.
 
-Status: etapy 1–6 zrealizowane. Podgląd CLI i dry-run zweryfikowane na Windows na
-prawdziwych plikach i prawdziwym kalendarzu „Plan WAT” (widoczny na liście kalendarzy).
-Następny krok: pierwszy zapis `sync --apply` przez użytkownika, potem etap 7 (UI).
+Status: etapy 1–7 zrealizowane. Zapis `sync --apply` zweryfikowany przez użytkownika na
+prawdziwym kalendarzu „Plan WAT” (Windows). GUI (etap 7) przetestowane w przeglądarce
+na atrapie kalendarza; do sprawdzenia przez użytkownika z prawdziwym kontem Google.
 
 Oznaczenia: **[zweryfikowane]** — potwierdzone w oficjalnej dokumentacji lub w plikach;
 **[niepotwierdzone]** — wniosek/pamięć, do sprawdzenia przy implementacji.
@@ -263,8 +263,10 @@ temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
 6. ✅ Wykonanie planu: `sync --apply` z potwierdzeniem, dziennik, retry/backoff, bezpiecznik,
    weryfikacja po zapisie, testy na FakeCalendar (przerwanie i wznowienie, zgubiona odpowiedź,
    duplikat po ponowieniu, seria błędów, wygasła sesja).
-7. UI NiceGUI (ekrany 1–5).
-8. Dopracowanie: README z OAuth, `start.bat`.
+7. ✅ UI NiceGUI (ekrany 1–5): `gcalsync ui` / `start.bat`, tylko 127.0.0.1. Logika ekranów
+   w `ui/controller.py` (testy pytest), widoki w `ui/app.py`. Zapis z GUI: plan liczony
+   ponownie tuż przed zapisem, przy różnicy nic nie jest zapisywane (`PlanChangedError`).
+8. Dopracowanie: README z OAuth (✅), `start.bat` (✅).
 
 ## Na później (poza v1)
 

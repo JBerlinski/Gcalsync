@@ -3,8 +3,8 @@
 Lokalna aplikacja do synchronizacji planu zajęć WAT (eksport CSV „w formacie Outlooka”
 z ewig) z Google Calendar. Plan projektu i decyzje: [docs/PLAN.md](docs/PLAN.md).
 
-Stan: podgląd, zapisana konfiguracja, logowanie do Google, kalendarz docelowy, dry-run
-i zapis synchronizacji (CLI). UI (etap 7) — jeszcze nie.
+Stan: gotowe CLI i interfejs graficzny w przeglądarce (GUI) — źródła, reguły, podgląd,
+logowanie do Google, kalendarz docelowy, dry-run i zapis synchronizacji.
 
 ## Wymagania
 
@@ -13,6 +13,32 @@ i zapis synchronizacji (CLI). UI (etap 7) — jeszcze nie.
   `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
 
 Wszystkie polecenia uruchamiasz w katalogu repozytorium: `uv run gcalsync …`.
+
+## Interfejs graficzny (GUI)
+
+```
+uv run gcalsync ui
+```
+
+albo dwuklik na `start.bat`. Otworzy się przeglądarka z adresem `http://127.0.0.1:8765`
+(GUI jest dostępne tylko z tego komputera). Zamknięcie: Ctrl+C albo zamknięcie okna konsoli.
+Opcje: `--port N`, `--no-browser`.
+
+Zakładki odpowiadają kolejnym krokom:
+
+1. **Źródła** — wgrywanie plików CSV (przeciągnij albo kliknij +), nazwa nowego źródła albo
+   podmiana pliku istniejącego, kolejność (priorytet) strzałkami, kodowanie, zmiana nazwy,
+   usuwanie. Przy każdym źródle: liczba zdarzeń, zakres dat, przedmioty, ostrzeżenia.
+2. **Reguły** — szybkie wykluczenie przedmiotu z listy przedmiotów z plików, reguły
+   zaawansowane (pole, warunek, źródła, daty), włączanie/wyłączanie z licznikiem trafień.
+3. **Podgląd** — co trafi do kalendarza, wykluczone, konflikty, duplikaty, kolizje, błędy.
+4. **Kalendarz** — logowanie do Google, kalendarz docelowy, szablon tytułu, polityka konfliktów.
+5. **Synchronizacja** — „Sprawdź zmiany” (dry-run) i „Zapisz w kalendarzu” z potwierdzeniem
+   (przy dużej liczbie usunięć trzeba wpisać ich liczbę), postęp zapisu i weryfikacja.
+   Tuż przed zapisem plan jest liczony ponownie — jeśli coś się zmieniło od podglądu,
+   nic nie zostanie zapisane.
+
+GUI i CLI korzystają z tych samych danych — zmiany zrobione w jednym są widoczne w drugim.
 
 ## Dane lokalne (poza repozytorium)
 

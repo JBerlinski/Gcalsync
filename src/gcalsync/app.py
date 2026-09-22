@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from gcalsync.core.diff import SyncPlan, plan_sync
 from gcalsync.core.pipeline import PreviewResult, build_preview
-from gcalsync.gcal.client import CalendarApi
+from gcalsync.gcal.auth import load_credentials
+from gcalsync.gcal.client import CalendarApi, GoogleCalendarApi
+from gcalsync.gcal.executor import ExecutionResult, Journal, Operation, execute_plan, verify
 from gcalsync.gcal.mapping import TIME_ZONE, event_body
 from gcalsync.storage import (
     DEFAULT_CALENDAR_NAME,
@@ -19,6 +24,11 @@ from gcalsync.storage import (
 )
 
 CALENDAR_DESCRIPTION = "Plan zajęć WAT zarządzany przez gcalsync."
+
+
+def google_api(paths: Paths) -> CalendarApi:
+    """Klient Google Calendar z zapisanym tokenem (odświeżanym w razie potrzeby)."""
+    return GoogleCalendarApi(load_credentials(paths))
 
 
 def preview_from_config(paths: Paths, config: Config) -> PreviewResult:
@@ -108,3 +118,55 @@ def use_calendar(
     config.calendar = CalendarConfig(id=calendar_id, summary=found.get("summary", calendar_id))
     save_config(paths, config)
     return config.calendar
+
+
+# --- zapis --------------------------------------------------------------------------------
+
+
+class PlanChangedError(Exception):
+    """Plan policzony tuż przed zapisem różni się od tego, który użytkownik zatwierdził."""
+
+
+def plan_signature(plan: SyncPlan) -> tuple:
+    return (
+        sorted(a.event.key for a in plan.adds),
+        sorted((u.existing["id"], tuple(u.changes)) for u in plan.updates),
+        sorted(d.existing["id"] for d in plan.deletes),
+    )
+
+
+@dataclass
+class ApplyOutcome:
+    result: ExecutionResult
+    journal_path: Path
+    remaining: list[str]  # rozbieżności po ponownym odczycie kalendarza (pusta = zgodny)
+
+
+def apply_sync(
+    paths: Paths,
+    config: Config,
+    api: CalendarApi,
+    confirmed: SyncPreview,
+    progress: Callable[[int, int, Operation, str | None], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    on_journal: Callable[[Path], None] | None = None,
+) -> ApplyOutcome:
+    """Zapisuje zatwierdzony plan. Tuż przed zapisem liczy plan ponownie z aktualnego stanu
+    kalendarza — jeśli coś się zmieniło od podglądu, nic nie zapisuje (PlanChangedError).
+    Po zapisie ponownie czyta kalendarz i zwraca pozostałe rozbieżności."""
+    if confirmed.blocked_reason:
+        raise ConfigError(f"Zapis zablokowany: {confirmed.blocked_reason}.")
+    fresh = build_sync_preview(paths, config, api)
+    if plan_signature(fresh.plan) != plan_signature(confirmed.plan):
+        raise PlanChangedError(
+            "Od podglądu zmienił się stan kalendarza albo konfiguracja — nic nie zapisano. "
+            "Sprawdź zmiany ponownie."
+        )
+    journal = Journal.create(paths.runs)
+    if on_journal:
+        on_journal(journal.path)
+    result = execute_plan(
+        api, fresh.calendar.id, fresh.plan, journal, progress=progress, sleep=sleep
+    )
+    after = build_sync_preview(paths, config, api)
+    return ApplyOutcome(result=result, journal_path=journal.path, remaining=verify(after.plan))

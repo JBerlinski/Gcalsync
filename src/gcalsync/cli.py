@@ -14,8 +14,11 @@ from pathlib import Path
 
 from gcalsync import __version__
 from gcalsync.app import (
+    PlanChangedError,
+    apply_sync,
     build_sync_preview,
     create_calendar,
+    google_api,
     preview_from_config,
     require_calendar,
     use_calendar,
@@ -23,9 +26,9 @@ from gcalsync.app import (
 from gcalsync.core.merge import ConflictPolicy
 from gcalsync.core.pipeline import PreviewResult, build_preview
 from gcalsync.core.rules import FIELD_LABELS, OPERATOR_LABELS, ExclusionRule, RuleError
-from gcalsync.gcal.auth import AuthError, load_credentials, login, logout
-from gcalsync.gcal.client import CalendarApi, GoogleApiError, GoogleCalendarApi
-from gcalsync.gcal.executor import Journal, execute_plan, last_run, run_warning, verify
+from gcalsync.gcal.auth import AuthError, login, logout
+from gcalsync.gcal.client import CalendarApi, GoogleApiError
+from gcalsync.gcal.executor import last_run, run_warning
 from gcalsync.report import preview_to_dict, render_text
 from gcalsync.sources.outlook_csv import CsvFileSource
 from gcalsync.storage import (
@@ -211,6 +214,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help="zapisz zmiany w kalendarzu (po wyświetleniu planu i potwierdzeniu „tak”)",
+    )
+
+    ui_parser = sub.add_parser(
+        "ui", help="uruchom interfejs graficzny w przeglądarce (tylko ten komputer)"
+    )
+    ui_parser.add_argument("--port", type=int, default=8765, help="port (domyślnie 8765)")
+    ui_parser.add_argument(
+        "--no-browser", action="store_true", help="nie otwieraj przeglądarki automatycznie"
     )
 
     # settings
@@ -449,10 +460,6 @@ class Context:
         return self.api_factory(self.paths)
 
 
-def google_api(paths: Paths) -> CalendarApi:
-    return GoogleCalendarApi(load_credentials(paths))
-
-
 def cmd_login(args: argparse.Namespace, ctx: Context) -> int:
     login(ctx.paths, open_browser=not args.no_browser)
     print(f"Zalogowano. Token zapisany w: {ctx.paths.token}")
@@ -548,8 +555,6 @@ def cmd_sync(args: argparse.Namespace, ctx: Context) -> int:
             print("Anulowano — nic nie zapisano.")
             return EXIT_OK
 
-    journal = Journal.create(ctx.paths.runs)
-    print(f"Dziennik operacji: {journal.path}")
     symbols = {"add": "+", "update": "~", "delete": "-"}
     width = len(str(plan.operation_count))
 
@@ -558,7 +563,18 @@ def cmd_sync(args: argparse.Namespace, ctx: Context) -> int:
         print(f"[{done:>{width}}/{total}] {symbols[op.kind]} {op.label}{status}", flush=True)
 
     try:
-        result = execute_plan(api, calendar.id, plan, journal, progress=progress, sleep=ctx.sleep)
+        outcome = apply_sync(
+            ctx.paths,
+            config,
+            api,
+            sync,
+            progress=progress,
+            sleep=ctx.sleep,
+            on_journal=lambda path: print(f"Dziennik operacji: {path}"),
+        )
+    except PlanChangedError as exc:
+        print(f"Błąd: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     except KeyboardInterrupt:
         print(
             "\nPrzerwano. Część zmian mogła zostać zapisana. Uruchom `gcalsync sync`, "
@@ -567,6 +583,7 @@ def cmd_sync(args: argparse.Namespace, ctx: Context) -> int:
         )
         return EXIT_INTERRUPTED
 
+    result = outcome.result
     print(
         f"\nWykonano {result.done} z {result.total} operacji"
         + (f", nieudanych: {len(result.failures)}" if result.failures else "")
@@ -575,18 +592,22 @@ def cmd_sync(args: argparse.Namespace, ctx: Context) -> int:
     )
     if result.aborted:
         print(f"Przerwano pozostałe operacje: {result.aborted}.", file=sys.stderr)
-
-    # Weryfikacja: ponowny odczyt kalendarza i porównanie z planem.
-    after = build_sync_preview(ctx.paths, config, api)
-    remaining = verify(after.plan)
-    if remaining:
-        print(f"Weryfikacja: kalendarz nie jest jeszcze zgodny ({len(remaining)}):")
-        for line in remaining:
+    if outcome.remaining:
+        print(f"Weryfikacja: kalendarz nie jest jeszcze zgodny ({len(outcome.remaining)}):")
+        for line in outcome.remaining:
             print(f"  {line}")
         print("Uruchom ponownie `gcalsync sync --apply`, aby dokończyć.")
         return EXIT_GOOGLE
     print("Weryfikacja: kalendarz jest zgodny z planem.")
     return EXIT_GOOGLE if result.failures else EXIT_OK
+
+
+def cmd_ui(args: argparse.Namespace, ctx: Context) -> int:
+    from gcalsync.ui.app import run_ui  # import NiceGUI tylko dla tego polecenia
+
+    print(f"GUI: http://127.0.0.1:{args.port} (zamknięcie: Ctrl+C w tym oknie)")
+    run_ui(ctx.paths, port=args.port, show=not args.no_browser)
+    return EXIT_OK
 
 
 def _with_paths(handler: Callable[[argparse.Namespace, Paths], int]):
@@ -603,6 +624,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Context], int]] = {
     "logout": cmd_logout,
     "calendar": cmd_calendar,
     "sync": cmd_sync,
+    "ui": cmd_ui,
 }
 
 
