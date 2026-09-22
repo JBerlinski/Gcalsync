@@ -198,6 +198,8 @@ def test_missing_required_column_is_error():
 def test_empty_file_is_error():
     assert "pusty" in errors(parse_outlook_csv(b""))[0].message
     assert errors(parse_outlook_csv(b"\r\n  \r\n"))
+    assert "pusty" in errors(parse_outlook_csv(b"\xef\xbb\xbf"))[0].message
+    assert "pusty" in errors(parse_outlook_csv(b",,,\r\n,,,\r\n"))[0].message
 
 
 def test_header_only_is_warning():

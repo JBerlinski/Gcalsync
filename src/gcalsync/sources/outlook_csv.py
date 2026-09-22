@@ -211,7 +211,9 @@ def parse_outlook_csv(
         if any(cell.strip() for cell in row):
             header = row
             break
-    assert header is not None  # tekst nie jest pusty, więc jest co najmniej jedna niepusta linia
+    if header is None:  # np. sam BOM albo same separatory
+        issues.append(issue("error", "Plik jest pusty."))
+        return ParsedSource(events=[], issues=issues, encoding=used_encoding, delimiter=delimiter)
     header_line = reader.line_num
 
     mapping, header_warnings = _map_header(header)
