@@ -40,7 +40,7 @@ def _value(field: str, value: str) -> str:
     return value
 
 
-def render_sync_text(sync: SyncPreview) -> str:
+def render_sync_text(sync: SyncPreview, apply: bool = False) -> str:
     plan, preview = sync.plan, sync.preview
     out: list[str] = []
     add = out.append
@@ -119,5 +119,8 @@ def render_sync_text(sync: SyncPreview) -> str:
         )
     if sync.blocked_reason:
         add(f"  Zapis byłby zablokowany: {sync.blocked_reason}.")
-    add("  DRY-RUN — nic nie zostało zapisane w kalendarzu.")
+    if apply:
+        add("  Powyższe zmiany zostaną zapisane dopiero po potwierdzeniu.")
+    else:
+        add("  DRY-RUN — nic nie zostało zapisane w kalendarzu. Zapis: gcalsync sync --apply")
     return "\n".join(out) + "\n"

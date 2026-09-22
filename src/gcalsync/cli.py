@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from gcalsync.core.pipeline import PreviewResult, build_preview
 from gcalsync.core.rules import FIELD_LABELS, OPERATOR_LABELS, ExclusionRule, RuleError
 from gcalsync.gcal.auth import AuthError, load_credentials, login, logout
 from gcalsync.gcal.client import CalendarApi, GoogleApiError, GoogleCalendarApi
+from gcalsync.gcal.executor import Journal, execute_plan, last_run, run_warning, verify
 from gcalsync.report import preview_to_dict, render_text
 from gcalsync.sources.outlook_csv import CsvFileSource
 from gcalsync.storage import (
@@ -47,6 +49,7 @@ EXIT_OK = 0
 EXIT_FILE_ERRORS = 1
 EXIT_USAGE = 2
 EXIT_GOOGLE = 3
+EXIT_INTERRUPTED = 130
 
 
 class CliError(Exception):
@@ -196,13 +199,18 @@ def build_parser() -> argparse.ArgumentParser:
         "forget", help="zapomnij kalendarz docelowy (w Google nic nie jest usuwane)"
     )
 
-    sub.add_parser(
+    sync = sub.add_parser(
         "sync",
-        help="DRY-RUN: pokaż, co zostałoby dodane, zmienione i usunięte w kalendarzu",
+        help="porównaj plan z kalendarzem (dry-run); z --apply zapisz po potwierdzeniu",
         description=(
             "Porównuje stan docelowy z zapisanej konfiguracji z kalendarzem Google i pokazuje "
-            "plan zmian. Niczego nie zapisuje."
+            "plan zmian. Bez --apply niczego nie zapisuje."
         ),
+    )
+    sync.add_argument(
+        "--apply",
+        action="store_true",
+        help="zapisz zmiany w kalendarzu (po wyświetleniu planu i potwierdzeniu „tak”)",
     )
 
     # settings
@@ -434,6 +442,8 @@ def cmd_settings(args: argparse.Namespace, paths: Paths) -> int:
 class Context:
     paths: Paths
     api_factory: Callable[[Paths], CalendarApi]
+    ask: Callable[[str], str] = input
+    sleep: Callable[[float], None] = time.sleep
 
     def api(self) -> CalendarApi:
         return self.api_factory(self.paths)
@@ -476,6 +486,7 @@ def cmd_calendar(args: argparse.Namespace, ctx: Context) -> int:
             save_config(ctx.paths, config)
         return EXIT_OK
     if action == "status":
+        _print_run_warning(ctx)
         if config.calendar is None:
             print("Kalendarz docelowy nie jest ustawiony. Utwórz: gcalsync calendar create")
             return EXIT_OK
@@ -492,12 +503,90 @@ def cmd_calendar(args: argparse.Namespace, ctx: Context) -> int:
     return EXIT_OK
 
 
+def _print_run_warning(ctx: Context) -> None:
+    warning = run_warning(last_run(ctx.paths.runs))
+    if warning:
+        print(f"UWAGA: {warning}\n")
+
+
+def _confirm(ctx: Context, prompt: str, expected: str) -> bool:
+    try:
+        return ctx.ask(prompt).strip().lower() == expected
+    except EOFError:
+        return False
+
+
 def cmd_sync(args: argparse.Namespace, ctx: Context) -> int:
+    _print_run_warning(ctx)
     config = load_config(ctx.paths)
     api = ctx.api() if config.calendar is not None else None
     sync = build_sync_preview(ctx.paths, config, api)
-    sys.stdout.write(render_sync_text(sync))
-    return EXIT_FILE_ERRORS if sync.preview.has_errors else EXIT_OK
+    sys.stdout.write(render_sync_text(sync, apply=args.apply))
+    if not args.apply:
+        return EXIT_FILE_ERRORS if sync.preview.has_errors else EXIT_OK
+
+    plan = sync.plan
+    if sync.blocked_reason:
+        print(f"\nZapis zablokowany: {sync.blocked_reason}. Nic nie zapisano.", file=sys.stderr)
+        return EXIT_FILE_ERRORS if sync.preview.has_errors else EXIT_USAGE
+    if plan.operation_count == 0:
+        print("\nKalendarz jest zgodny z planem — nic do zapisania.")
+        return EXIT_OK
+
+    calendar = sync.calendar
+    question = (
+        f"\nZapisać w kalendarzu „{calendar.summary}”: dodanie {len(plan.adds)}, "
+        f"zmiana {len(plan.updates)}, usunięcie {len(plan.deletes)}? Wpisz „tak”: "
+    )
+    if not _confirm(ctx, question, "tak"):
+        print("Anulowano — nic nie zapisano.")
+        return EXIT_OK
+    if plan.mass_delete:
+        count = str(len(plan.deletes))
+        question = f"Plan usuwa {count} zdarzeń. Aby potwierdzić, wpisz liczbę usuwanych zdarzeń: "
+        if not _confirm(ctx, question, count):
+            print("Anulowano — nic nie zapisano.")
+            return EXIT_OK
+
+    journal = Journal.create(ctx.paths.runs)
+    print(f"Dziennik operacji: {journal.path}")
+    symbols = {"add": "+", "update": "~", "delete": "-"}
+    width = len(str(plan.operation_count))
+
+    def progress(done: int, total: int, op, error: str | None) -> None:
+        status = f"  BŁĄD: {error}" if error else ""
+        print(f"[{done:>{width}}/{total}] {symbols[op.kind]} {op.label}{status}", flush=True)
+
+    try:
+        result = execute_plan(api, calendar.id, plan, journal, progress=progress, sleep=ctx.sleep)
+    except KeyboardInterrupt:
+        print(
+            "\nPrzerwano. Część zmian mogła zostać zapisana. Uruchom `gcalsync sync`, "
+            "aby zobaczyć, co zostało, i dokończ przez --apply.",
+            file=sys.stderr,
+        )
+        return EXIT_INTERRUPTED
+
+    print(
+        f"\nWykonano {result.done} z {result.total} operacji"
+        + (f", nieudanych: {len(result.failures)}" if result.failures else "")
+        + (f", pominiętych: {result.not_attempted}" if result.not_attempted else "")
+        + "."
+    )
+    if result.aborted:
+        print(f"Przerwano pozostałe operacje: {result.aborted}.", file=sys.stderr)
+
+    # Weryfikacja: ponowny odczyt kalendarza i porównanie z planem.
+    after = build_sync_preview(ctx.paths, config, api)
+    remaining = verify(after.plan)
+    if remaining:
+        print(f"Weryfikacja: kalendarz nie jest jeszcze zgodny ({len(remaining)}):")
+        for line in remaining:
+            print(f"  {line}")
+        print("Uruchom ponownie `gcalsync sync --apply`, aby dokończyć.")
+        return EXIT_GOOGLE
+    print("Weryfikacja: kalendarz jest zgodny z planem.")
+    return EXIT_GOOGLE if result.failures else EXIT_OK
 
 
 def _with_paths(handler: Callable[[argparse.Namespace, Paths], int]):
@@ -521,6 +610,8 @@ def main(
     argv: list[str] | None = None,
     paths: Paths | None = None,
     api_factory: Callable[[Paths], CalendarApi] = google_api,
+    ask: Callable[[str], str] = input,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     # Konsola Windows lub przekierowanie do pliku mogą nie obsługiwać wszystkich znaków.
     for stream in (sys.stdout, sys.stderr):
@@ -533,7 +624,7 @@ def main(
     if handler is None:
         parser.print_help()
         return EXIT_OK
-    ctx = Context(paths=paths or Paths.default(), api_factory=api_factory)
+    ctx = Context(paths=paths or Paths.default(), api_factory=api_factory, ask=ask, sleep=sleep)
     try:
         return handler(args, ctx)
     except (CliError, ConfigError) as exc:

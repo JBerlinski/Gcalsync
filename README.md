@@ -3,8 +3,8 @@
 Lokalna aplikacja do synchronizacji planu zajęć WAT (eksport CSV „w formacie Outlooka”
 z ewig) z Google Calendar. Plan projektu i decyzje: [docs/PLAN.md](docs/PLAN.md).
 
-Stan: podgląd, zapisana konfiguracja, logowanie do Google, tworzenie kalendarza i **dry-run**
-synchronizacji. Zapis zdarzeń do kalendarza (etap 6) i UI (etap 7) — jeszcze nie.
+Stan: podgląd, zapisana konfiguracja, logowanie do Google, kalendarz docelowy, dry-run
+i zapis synchronizacji (CLI). UI (etap 7) — jeszcze nie.
 
 ## Wymagania
 
@@ -64,6 +64,16 @@ Podgląd jednorazowy bez zapisywania konfiguracji: `gcalsync preview PLIK1 PLIK2
    Europe/Warsaw) i zapisuje jego ID w `config.json`.
 4. `uv run gcalsync sync` — **dry-run**: pokazuje, co zostałoby dodane, zmienione i usunięte.
    Niczego nie zapisuje.
+5. `uv run gcalsync sync --apply` — pokazuje ten sam plan i zapisuje go dopiero po wpisaniu
+   „tak”. Gdy plan usuwa dużo zdarzeń, trzeba dodatkowo wpisać ich liczbę. Kolejność:
+   dodania, zmiany, usunięcia; ok. 5 zapytań/s. Na końcu aplikacja ponownie czyta kalendarz
+   i sprawdza, czy jest zgodny z planem.
+
+Każdy zapis ma dziennik w `runs\<czas>.jsonl`. Jeśli synchronizacja zostanie przerwana
+(Ctrl+C, brak sieci, wygasła sesja), następne `sync` ostrzeże o tym na początku — wystarczy
+ponownie `sync --apply`: plan liczy się od nowa z faktycznego stanu kalendarza, więc dokończy
+tylko brakujące operacje. Pojedyncze nieudane operacje nie zatrzymują pozostałych; trzy nieudane
+pod rząd albo wygasła sesja przerywają zapis.
 
 Pozostałe: `calendar` (sprawdzenie), `calendar forget`, `calendar use ID`, `logout`.
 

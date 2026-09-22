@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import itertools
+from collections.abc import Callable
 from typing import Any
 
 from gcalsync.gcal.client import GoogleApiError
@@ -25,6 +26,23 @@ class FakeCalendarApi:
         self.events: dict[str, dict[str, dict[str, Any]]] = {}
         self.calls: list[str] = []
         self._ids = itertools.count(1)
+        self.writes = 0
+        # Wstrzykiwanie awarii: fail(kind, nr_zapisu) -> (wyjątek, czy_zapis_mimo_to_się_udał)
+        self.fail: Callable[[str, int], tuple[BaseException, bool] | None] | None = None
+
+    def _maybe_fail(self, kind: str) -> bool:
+        """Zwraca True, jeśli po wykonaniu operacji trzeba rzucić wyjątek (odpowiedź „zgubiona”)."""
+        self.writes += 1
+        if self.fail is None:
+            return False
+        outcome = self.fail(kind, self.writes)
+        if outcome is None:
+            return False
+        exc, committed = outcome
+        if not committed:
+            raise exc
+        self._pending = exc
+        return True
 
     # --- API używane przez aplikację ---
 
@@ -50,6 +68,36 @@ class FakeCalendarApi:
         if calendar_id not in self.events:
             raise GoogleApiError("not found", 404)
         return [copy.deepcopy(e) for e in self.events[calendar_id].values()]
+
+    def insert_event(self, calendar_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(f"insert {body.get('summary')}")
+        lost = self._maybe_fail("insert")
+        created = self.put_event(calendar_id, body)
+        if lost:
+            raise self._pending
+        return created
+
+    def patch_event(self, calendar_id: str, event_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(f"patch {event_id}")
+        lost = self._maybe_fail("patch")
+        event = self.events[calendar_id].get(event_id)
+        if event is None:
+            raise GoogleApiError("not found", 404)
+        for key, value in body.items():
+            event[key] = to_google_time(value) if key in ("start", "end") else copy.deepcopy(value)
+        if event.get("location") == "":
+            del event["location"]
+        if lost:
+            raise self._pending
+        return copy.deepcopy(event)
+
+    def delete_event(self, calendar_id: str, event_id: str) -> None:
+        self.calls.append(f"delete {event_id}")
+        lost = self._maybe_fail("delete")
+        # Prawdziwy klient zamienia 404/410 na sukces — atrapa robi to samo.
+        self.events[calendar_id].pop(event_id, None)
+        if lost:
+            raise self._pending
 
     # --- pomocnicze dla testów ---
 

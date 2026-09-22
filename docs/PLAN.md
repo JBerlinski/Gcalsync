@@ -3,8 +3,9 @@
 Lokalna aplikacja z UI do synchronizacji planu zajęć WAT (eksport CSV „w formacie
 Outlooka” z ewig) z Google Calendar.
 
-Status: etapy 1–5 zrealizowane (podgląd CLI zweryfikowany na Windows na prawdziwych
-plikach). Przerwa: dry-run na prawdziwym kalendarzu przed etapem 6 (zapis).
+Status: etapy 1–6 zrealizowane. Podgląd CLI i dry-run zweryfikowane na Windows na
+prawdziwych plikach i prawdziwym kalendarzu „Plan WAT” (widoczny na liście kalendarzy).
+Następny krok: pierwszy zapis `sync --apply` przez użytkownika, potem etap 7 (UI).
 
 Oznaczenia: **[zweryfikowane]** — potwierdzone w oficjalnej dokumentacji lub w plikach;
 **[niepotwierdzone]** — wniosek/pamięć, do sprawdzenia przy implementacji.
@@ -259,7 +260,9 @@ temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
 4. ✅ Trwała konfiguracja (źródła, priorytety, reguły, szablon tytułu, kopie CSV).
 5. ✅ Google: OAuth, utworzenie/wybór kalendarza, odczyt, diff (dry-run).
    **Przerwa: dry-run na prawdziwym kalendarzu przed zapisem.**
-6. Wykonanie planu: dziennik, retry/backoff, bezpiecznik, testy na FakeCalendar.
+6. ✅ Wykonanie planu: `sync --apply` z potwierdzeniem, dziennik, retry/backoff, bezpiecznik,
+   weryfikacja po zapisie, testy na FakeCalendar (przerwanie i wznowienie, zgubiona odpowiedź,
+   duplikat po ponowieniu, seria błędów, wygasła sesja).
 7. UI NiceGUI (ekrany 1–5).
 8. Dopracowanie: README z OAuth, `start.bat`.
 
