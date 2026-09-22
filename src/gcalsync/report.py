@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
 from gcalsync.core.pipeline import PreviewResult
-from gcalsync.model import Event
+from gcalsync.model import Event, Issue
 
 WEEKDAYS = ("pn", "wt", "śr", "cz", "pt", "so", "nd")
 
@@ -31,6 +32,12 @@ def format_event(event: Event, result: PreviewResult, *, with_source: bool = Tru
     if with_source:
         parts.append(f"[{result.source_name(event.source_id)}]")
     return "  ".join(parts)
+
+
+def format_issue(issue: Issue, result: PreviewResult) -> str:
+    if issue.source_id is None:
+        return str(issue)
+    return str(replace(issue, source_id=result.source_name(issue.source_id)))
 
 
 def _section(title: str, count: int | None = None) -> str:
@@ -72,7 +79,7 @@ def render_text(result: PreviewResult) -> str:
     if not result.rules:
         add("  (brak)")
     for rule, hits in zip(result.rules, result.rule_hits(), strict=True):
-        add(f"  - {rule.describe()} — wykluczono: {hits}")
+        add(f"  - {rule.describe(result.source_names)} — wykluczono: {hits}")
 
     add(_section("Wykluczone przez reguły", len(result.excluded)))
     for x in sorted(result.excluded, key=lambda x: x.event.start):
@@ -84,7 +91,10 @@ def render_text(result: PreviewResult) -> str:
         add(f"  {format_event(d.kept, result)}")
         add(f"      występuje też w: {others}")
         for diff in d.differences:
-            add(f"      rozbieżność — {diff}; użyto wartości z ważniejszego źródła")
+            add(
+                f"      rozbieżność — {diff.describe(result.source_names)}; "
+                "użyto wartości z ważniejszego źródła"
+            )
 
     add(_section("Konflikty rozwiązane priorytetem", len(result.conflicts)))
     for c in result.conflicts:
@@ -98,9 +108,9 @@ def render_text(result: PreviewResult) -> str:
         add(f"    nakłada się na: {format_event(o.second, result)}")
 
     add(_section("Błędy", len(result.errors)))
-    out += [f"  {i}" for i in result.errors]
+    out += [f"  {format_issue(i, result)}" for i in result.errors]
     add(_section("Ostrzeżenia", len(result.warnings)))
-    out += [f"  {i}" for i in result.warnings]
+    out += [f"  {format_issue(i, result)}" for i in result.warnings]
 
     add(_section("Do kalendarza", len(result.events)))
     out += _course_breakdown(result.events)
@@ -166,7 +176,7 @@ def preview_to_dict(result: PreviewResult) -> dict[str, Any]:
             for s in result.sources
         ],
         "rules": [
-            {"rule": r.describe(), "excluded": hits}
+            {"rule": r.describe(result.source_names), "excluded": hits}
             for r, hits in zip(result.rules, result.rule_hits(), strict=True)
         ],
         "policy": str(result.policy),
@@ -175,14 +185,14 @@ def preview_to_dict(result: PreviewResult) -> dict[str, Any]:
         ),
         "events": [event_to_dict(e, result) for e in result.events],
         "excluded": [
-            {"event": event_to_dict(x.event, result), "rule": x.rule.describe()}
+            {"event": event_to_dict(x.event, result), "rule": x.rule.describe(result.source_names)}
             for x in result.excluded
         ],
         "duplicates": [
             {
                 "kept": event_to_dict(d.kept, result),
                 "dropped": [event_to_dict(e, result) for e in d.dropped],
-                "differences": list(d.differences),
+                "differences": [x.describe(result.source_names) for x in d.differences],
             }
             for d in result.duplicates
         ],
@@ -198,7 +208,12 @@ def preview_to_dict(result: PreviewResult) -> dict[str, Any]:
             for o in result.overlaps
         ],
         "issues": [
-            {"level": i.level, "source": i.source_id, "row": i.row, "message": i.message}
+            {
+                "level": i.level,
+                "source": result.source_name(i.source_id) if i.source_id else None,
+                "row": i.row,
+                "message": i.message,
+            }
             for i in result.issues
         ],
         "summary": {

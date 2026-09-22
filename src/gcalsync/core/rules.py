@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from typing import Literal
@@ -84,12 +84,14 @@ class ExclusionRule:
             text, needle = text.casefold(), needle.casefold()
         return needle in text if self.op == "contains" else needle == text
 
-    def describe(self) -> str:
+    def describe(self, source_names: Mapping[str, str] | None = None) -> str:
+        """Opis reguły po polsku; `source_names` mapuje id źródeł na nazwy do wyświetlenia."""
         parts = [f"{FIELD_LABELS[self.field]} {OPERATOR_LABELS[self.op]} „{self.value}”"]
         if self.case_sensitive:
             parts.append("z rozróżnieniem wielkości liter")
         if self.sources is not None:
-            parts.append("tylko źródła: " + ", ".join(self.sources))
+            names = source_names or {}
+            parts.append("tylko źródła: " + ", ".join(names.get(s, s) for s in self.sources))
         if self.date_from or self.date_to:
             parts.append(f"daty: {self.date_from or '…'} – {self.date_to or '…'}")
         if not self.enabled:

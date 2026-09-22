@@ -13,12 +13,29 @@ Priority = Mapping[str, int]
 
 
 @dataclass(frozen=True)
+class FieldDifference:
+    """Rozbieżność pola między zachowanym egzemplarzem duplikatu a odrzuconym."""
+
+    label: str
+    kept_value: str
+    other_value: str
+    other: Event
+
+    def describe(self, source_names: Mapping[str, str] | None = None) -> str:
+        name = (source_names or {}).get(self.other.source_id, self.other.source_id)
+        return (
+            f"{self.label}: „{self.kept_value}” vs „{self.other_value}” "
+            f"({name}, wiersz {self.other.row})"
+        )
+
+
+@dataclass(frozen=True)
 class DuplicateGroup:
     """To samo zdarzenie (ten sam klucz) występujące więcej niż raz."""
 
     kept: Event
     dropped: tuple[Event, ...]
-    differences: tuple[str, ...]  # rozbieżności pól między zachowanym a odrzuconymi
+    differences: tuple[FieldDifference, ...]
 
 
 @dataclass(frozen=True)
@@ -42,18 +59,12 @@ class ConflictPolicy(StrEnum):
     KEEP_ALL = "keep-all"  # nic nie jest odrzucane, kolizje są tylko raportowane
 
 
-def _differences(kept: Event, other: Event) -> list[str]:
+def _differences(kept: Event, other: Event) -> list[FieldDifference]:
     diffs = []
     if kept.location != other.location:
-        diffs.append(
-            f"lokalizacja: „{kept.location}” ({kept.source_id}) "
-            f"vs „{other.location}” ({other.source_id}, wiersz {other.row})"
-        )
+        diffs.append(FieldDifference("lokalizacja", kept.location, other.location, other))
     if kept.seq != other.seq:
-        diffs.append(
-            f"numer zajęć: [{kept.seq}] ({kept.source_id}) "
-            f"vs [{other.seq}] ({other.source_id}, wiersz {other.row})"
-        )
+        diffs.append(FieldDifference("numer zajęć", f"[{kept.seq}]", f"[{other.seq}]", other))
     return diffs
 
 

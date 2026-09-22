@@ -71,19 +71,105 @@ def test_preview_file_errors_give_exit_code_1(capsys, tmp_path):
 
 
 def test_names_count_mismatch_is_usage_error(capsys):
-    with pytest.raises(SystemExit) as exc:
-        main(["preview", str(NEW_GROUP), "--names", "a", "b"])
-    assert exc.value.code == 2
+    assert main(["preview", str(NEW_GROUP), "--names", "a", "b"]) == 2
+    assert "Liczba nazw" in capsys.readouterr().err
 
 
 def test_invalid_regex_is_usage_error(capsys):
-    with pytest.raises(SystemExit) as exc:
-        main(["preview", str(NEW_GROUP), "--exclude-regex", "(zły"])
-    assert exc.value.code == 2
+    assert main(["preview", str(NEW_GROUP), "--exclude-regex", "(zły"]) == 2
     assert "wyrażenie regularne" in capsys.readouterr().err
 
 
 def test_missing_file_is_usage_error(capsys, tmp_path):
-    with pytest.raises(SystemExit) as exc:
-        main(["preview", str(tmp_path / "brak.csv")])
-    assert exc.value.code == 2
+    assert main(["preview", str(tmp_path / "brak.csv")]) == 2
+    assert "Nie ma pliku" in capsys.readouterr().err
+
+
+# --- zapisana konfiguracja (etap 4) -------------------------------------------------------
+
+
+@pytest.fixture
+def paths(tmp_path):
+    from gcalsync.storage import Paths
+
+    return Paths(tmp_path / "home")
+
+
+def run(paths, *argv):
+    return main(list(argv), paths=paths)
+
+
+def test_paths_command_creates_dir_and_shows_client_secret_location(capsys, paths):
+    assert run(paths, "paths") == 0
+    out = capsys.readouterr().out
+    assert str(paths.client_secret) in out
+    assert "BRAK" in out
+    assert paths.root.is_dir()
+
+
+def test_configured_workflow_end_to_end(capsys, paths):
+    assert run(paths, "sources", "add", str(DEFAULT_GROUP), "--name", "Grupa domyślna") == 0
+    assert run(paths, "sources", "add", str(NEW_GROUP), "--name", "Grupa kierunkowa") == 0
+    assert run(paths, "sources", "move", "Grupa kierunkowa", "1") == 0
+    assert run(paths, "rules", "add", "--course", "Modelowanie danych do BIM") == 0
+    capsys.readouterr()
+
+    assert run(paths, "sources") == 0
+    out = capsys.readouterr().out
+    assert out.index("1. Grupa kierunkowa") < out.index("2. Grupa domyślna")
+
+    assert run(paths, "preview") == 0
+    out = capsys.readouterr().out
+    assert "=== Do kalendarza (75) ===" in out
+    assert "przedmiot równa się „Modelowanie danych do BIM” — wykluczono: 30" in out
+
+    assert run(paths, "rules", "disable", "1") == 0
+    capsys.readouterr()
+    assert run(paths, "preview") == 0
+    assert "=== Konflikty rozwiązane priorytetem (7) ===" in capsys.readouterr().out
+
+
+def test_rule_scoped_to_source_shows_source_name(capsys, paths):
+    run(paths, "sources", "add", str(DEFAULT_GROUP), "--name", "Grupa domyślna")
+    assert run(paths, "rules", "add", "--contains", "BIM", "--source", "Grupa domyślna") == 0
+    assert "tylko źródła: Grupa domyślna" in capsys.readouterr().out
+
+
+def test_rule_add_errors(capsys, paths):
+    assert run(paths, "rules", "add") == 2
+    assert run(paths, "rules", "add", "--regex", "(") == 2
+    assert run(paths, "rules", "add", "--course", "X", "--source", "nie ma") == 2
+    assert run(paths, "rules", "add", "--course", "X", "--field", "kind") == 2
+    assert run(paths, "rules", "remove", "5") == 2
+    err = capsys.readouterr().err
+    assert "Nie ma źródła „nie ma”" in err
+    assert "Nie ma reguły nr 5" in err
+
+
+def test_rule_add_full_form(capsys, paths):
+    argv = ["rules", "add", "--field", "location", "--op", "equals", "--value", "A 59"]
+    assert run(paths, *argv) == 0
+    assert "lokalizacja równa się „A 59”" in capsys.readouterr().out
+
+
+def test_preview_without_sources_is_clear_error(capsys, paths):
+    assert run(paths, "preview") == 2
+    assert "Brak zapisanych źródeł" in capsys.readouterr().err
+
+
+def test_sources_replace_and_remove(capsys, paths):
+    run(paths, "sources", "add", str(NEW_GROUP), "--name", "A")
+    assert run(paths, "sources", "replace", "A", str(DEFAULT_GROUP)) == 0
+    assert run(paths, "sources", "remove", "A") == 0
+    assert run(paths, "sources", "remove", "A") == 2
+    assert list(paths.files.iterdir()) == []
+
+
+def test_settings(capsys, paths):
+    assert run(paths, "settings", "--title-template", "{course} [{kind}]") == 0
+    assert "{course} [{kind}]" in capsys.readouterr().out
+    assert run(paths, "settings", "--title-template", "{zle}") == 2
+    assert run(paths, "settings") == 0
+    out = capsys.readouterr().out
+    assert "{course} [{kind}]" in out
+    assert "nie ustawiony" in out
