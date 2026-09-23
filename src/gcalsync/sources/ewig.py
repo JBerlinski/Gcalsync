@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import requests
 
@@ -27,7 +27,11 @@ BASE_URL = "https://ewig.wcy.wat.edu.pl/ed2/"
 PAGE_ENCODING = "iso-8859-2"
 MID_GROUP_PLAN = 328
 TIMEOUT_SECONDS = 30
-USER_AGENT = "gcalsync (synchronizacja planu zajęć; https://github.com/JBerlinski/Gcalsync)"
+# Tylko ASCII (nagłówki HTTP). Jak przeglądarka, z dopiskiem identyfikującym narzędzie.
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/135.0 Safari/537.36 gcalsync/0.1"
+)
 
 SID_IN_PAGE = re.compile(r"var sid = new String\('([0-9a-fA-F]+)'\)")
 
@@ -126,33 +130,44 @@ class EwigClient:
         self.session.headers.setdefault("User-Agent", USER_AGENT)
         self._sleep = sleep
         self.sid: str | None = None
+        self._referer: str | None = None
 
-    def _get(self, url: str) -> requests.Response:
-        return self._request("GET", url)
+    def _get(self, url: str, step: str) -> requests.Response:
+        return self._request("GET", url, step)
 
-    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
-        last: Exception | None = None
+    def _request(self, method: str, url: str, step: str, **kwargs) -> requests.Response:
+        """Zapytanie jak z przeglądarki: Referer poprzedniej strony, jedna ponowna próba."""
+        headers = {"Referer": self._referer} if self._referer else {}
+        if method == "POST":
+            headers["Origin"] = BASE_URL.rstrip("/").rsplit("/", 1)[0]
+        where = f"{step} ({urlparse(url).path})"  # bez parametrów: zawierają identyfikator sesji
+        last: str = ""
         for attempt in range(2):  # jedna ponowna próba przy błędzie sieci lub 5xx
             try:
-                response = self.session.request(method, url, timeout=TIMEOUT_SECONDS, **kwargs)
+                response = self.session.request(
+                    method, url, headers=headers, timeout=TIMEOUT_SECONDS, **kwargs
+                )
             except requests.RequestException as exc:
-                last = exc
+                last = f"{type(exc).__name__}: {exc}"
             else:
                 if response.status_code < 500:
                     if response.status_code >= 400:
-                        raise EwigError(f"ewig zwrócił HTTP {response.status_code}.")
+                        raise EwigError(
+                            f"ewig zwrócił HTTP {response.status_code} — krok: {where}."
+                        )
+                    self._referer = response.url or url
                     return response
-                last = EwigError(f"ewig zwrócił HTTP {response.status_code}.")
+                last = f"HTTP {response.status_code}"
             if attempt == 0:
                 self._sleep(5)
-        raise EwigError(f"Brak połączenia z ewig: {type(last).__name__}: {last}") from None
+        raise EwigError(f"Brak połączenia z ewig — krok: {where}: {last}")
 
     @staticmethod
     def _text(response: requests.Response) -> str:
         return response.content.decode(PAGE_ENCODING, errors="replace")
 
     def login(self) -> str:
-        page = self._text(self._get(BASE_URL))
+        page = self._text(self._get(BASE_URL, "strona logowania"))
         form = _LoginFormParser()
         form.feed(page)
         if not form.action:
@@ -162,6 +177,7 @@ class EwigClient:
         response = self._request(
             "POST",
             BASE_URL + form.action,
+            "logowanie",
             data={k: v.encode(PAGE_ENCODING) for k, v in data.items()},
         )
         text = self._text(response)
@@ -176,10 +192,10 @@ class EwigClient:
     def fetch_group_csv(self, semester_iid: int, group: str) -> bytes:
         if self.sid is None:
             raise EwigError("Najpierw zaloguj się (login()).")
-        plan = self._text(self._get(group_plan_url(self.sid, semester_iid, group)))
+        plan = self._text(self._get(group_plan_url(self.sid, semester_iid, group), f"plan {group}"))
         if group not in plan:
             raise EwigError(f"Nie udało się otworzyć planu grupy {group}.")
-        data = self._get(export_url(self.sid, semester_iid, group)).content
+        data = self._get(export_url(self.sid, semester_iid, group), f"eksport {group}").content
         head = data[:512].lstrip().lower()
         if head.startswith(b"<") or b"<html" in head:
             raise EwigError(f"Eksport planu grupy {group} zwrócił stronę HTML zamiast pliku CSV.")
