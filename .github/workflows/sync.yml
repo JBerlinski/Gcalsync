@@ -25,6 +25,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: write # tylko do podtrzymania harmonogramu (ostatni krok)
 
 jobs:
   sync:
@@ -76,3 +77,13 @@ jobs:
           path: run-output
           retention-days: 7
           if-no-files-found: ignore
+
+      # W publicznym repo GitHub wyłącza harmonogram po 60 dniach bez aktywności w repo.
+      # Ponowne „włączenie” workflow przez API zeruje ten licznik — bez sztucznych commitów.
+      - name: Podtrzymanie harmonogramu
+        if: always() && github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh api --silent -X PUT "repos/$REPO/actions/workflows/sync.yml/enable"
