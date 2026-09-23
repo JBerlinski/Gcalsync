@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from collections import Counter
@@ -23,13 +24,22 @@ from gcalsync.app import (
     require_calendar,
     use_calendar,
 )
+from gcalsync.auto import (
+    DEFAULT_CONFIG_FILE,
+    EXIT_EXTERNAL,
+    AutoResult,
+    load_auto_config,
+    markdown_summary,
+    run_auto,
+)
 from gcalsync.core.merge import ConflictPolicy
 from gcalsync.core.pipeline import PreviewResult, build_preview
 from gcalsync.core.rules import FIELD_LABELS, OPERATOR_LABELS, ExclusionRule, RuleError
-from gcalsync.gcal.auth import AuthError, login, logout
-from gcalsync.gcal.client import CalendarApi, GoogleApiError
+from gcalsync.gcal.auth import AuthError, credentials_from_json, login, logout
+from gcalsync.gcal.client import CalendarApi, GoogleApiError, GoogleCalendarApi
 from gcalsync.gcal.executor import last_run, run_warning
 from gcalsync.report import preview_to_dict, render_text
+from gcalsync.sources.ewig import EwigClient, EwigError
 from gcalsync.sources.outlook_csv import CsvFileSource
 from gcalsync.storage import (
     DEFAULT_CALENDAR_NAME,
@@ -216,12 +226,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="zapisz zmiany w kalendarzu (po wyświetleniu planu i potwierdzeniu „tak”)",
     )
 
-    ui_parser = sub.add_parser(
-        "ui", help="uruchom interfejs graficzny w przeglądarce (tylko ten komputer)"
+    auto = sub.add_parser(
+        "auto",
+        help="tryb automatyczny: pobierz plan z ewig i zsynchronizuj (GitHub Actions)",
+        description=(
+            "Pobiera plan grup z ewig i porównuje z kalendarzem. Konfiguracja z pliku "
+            "gcalsync.config.json, sekrety ze zmiennych EWIG_LOGIN, EWIG_PASSWORD, "
+            "GOOGLE_TOKEN_JSON. Bez --apply/--apply-if-enabled to tylko dry-run."
+        ),
     )
-    ui_parser.add_argument("--port", type=int, default=8765, help="port (domyślnie 8765)")
-    ui_parser.add_argument(
-        "--no-browser", action="store_true", help="nie otwieraj przeglądarki automatycznie"
+    auto.add_argument("--config", type=Path, default=Path(DEFAULT_CONFIG_FILE), metavar="PLIK")
+    mode = auto.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="zapisz zmiany w kalendarzu")
+    mode.add_argument(
+        "--apply-if-enabled",
+        action="store_true",
+        help="zapisz tylko, jeśli w konfiguracji auto_apply = true (dla uruchomień cyklicznych)",
+    )
+    auto.add_argument(
+        "--allow-mass-delete",
+        action="store_true",
+        help="pozwól na zapis mimo zadziałania bezpiecznika masowego usuwania",
+    )
+    auto.add_argument(
+        "--save-dir", type=Path, metavar="KATALOG", help="zapisz pobrane pliki i dziennik"
+    )
+    auto.add_argument(
+        "--summary",
+        type=Path,
+        metavar="PLIK",
+        help="dopisz podsumowanie Markdown (np. $GITHUB_STEP_SUMMARY)",
     )
 
     # settings
@@ -602,12 +636,33 @@ def cmd_sync(args: argparse.Namespace, ctx: Context) -> int:
     return EXIT_GOOGLE if result.failures else EXIT_OK
 
 
-def cmd_ui(args: argparse.Namespace, ctx: Context) -> int:
-    from gcalsync.ui.app import run_ui  # import NiceGUI tylko dla tego polecenia
-
-    print(f"GUI: http://127.0.0.1:{args.port} (zamknięcie: Ctrl+C w tym oknie)")
-    run_ui(ctx.paths, port=args.port, show=not args.no_browser)
-    return EXIT_OK
+def cmd_auto(args: argparse.Namespace, ctx: Context) -> int:
+    config = load_auto_config(args.config)
+    apply = args.apply or (args.apply_if_enabled and config.auto_apply)
+    if args.apply_if_enabled and not config.auto_apply:
+        print("Zapis wyłączony w konfiguracji (auto_apply = false) — tylko dry-run.\n")
+    try:
+        ewig = EwigClient(os.environ.get("EWIG_LOGIN", ""), os.environ.get("EWIG_PASSWORD", ""))
+        result = run_auto(
+            config,
+            ewig,
+            lambda: GoogleCalendarApi(
+                credentials_from_json(os.environ.get("GOOGLE_TOKEN_JSON", ""))
+            ),
+            apply=apply,
+            allow_mass_delete=args.allow_mass_delete,
+            save_dir=args.save_dir,
+            sleep=ctx.sleep,
+        )
+    except (EwigError, AuthError, GoogleApiError, ConfigError) as exc:
+        result = AutoResult(
+            EXIT_EXTERNAL if not isinstance(exc, ConfigError) else EXIT_USAGE, f"Błąd: {exc}"
+        )
+    print(f"\n{result.headline}")
+    if args.summary:
+        with args.summary.open("a", encoding="utf-8") as f:
+            f.write(markdown_summary(result))
+    return result.exit_code
 
 
 def _with_paths(handler: Callable[[argparse.Namespace, Paths], int]):
@@ -624,7 +679,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace, Context], int]] = {
     "logout": cmd_logout,
     "calendar": cmd_calendar,
     "sync": cmd_sync,
-    "ui": cmd_ui,
+    "auto": cmd_auto,
 }
 
 

@@ -162,7 +162,7 @@ def _rule_to_dict(rule: ExclusionRule) -> dict[str, Any]:
     }
 
 
-def _rule_from_dict(data: dict[str, Any]) -> ExclusionRule:
+def rule_from_dict(data: dict[str, Any]) -> ExclusionRule:
     return ExclusionRule(
         field=data["field"],
         op=data["op"],
@@ -193,7 +193,7 @@ def config_from_dict(data: dict[str, Any]) -> Config:
     try:
         config = Config(
             sources=[SourceConfig(**s) for s in data.get("sources", [])],
-            rules=[_rule_from_dict(r) for r in data.get("rules", [])],
+            rules=[rule_from_dict(r) for r in data.get("rules", [])],
             policy=ConflictPolicy(data.get("policy", ConflictPolicy.PRIORITY.value)),
             title_template=data.get("title_template", DEFAULT_TITLE_TEMPLATE),
             calendar=CalendarConfig(**data["calendar"]) if data.get("calendar") else None,
@@ -324,12 +324,6 @@ def replace_source_file(
     paths: Paths, config: Config, name: str, file: Path, encoding: str | None = None
 ) -> SourceConfig:
     return replace_source_data(paths, config, name, file.read_bytes(), file.name, encoding)
-
-
-def rename_source(config: Config, name: str, new_name: str) -> SourceConfig:
-    source = config.source_by_name(name)
-    source.name = _check_name(config, new_name, exclude=source)
-    return source
 
 
 def remove_source(

@@ -71,18 +71,8 @@ def login(paths: Paths, open_browser: bool = True) -> Credentials:
     return credentials
 
 
-def load_credentials(paths: Paths) -> Credentials:
-    """Wczytuje zapisany token i w razie potrzeby odświeża go (bez przeglądarki)."""
-    if not paths.token.exists():
-        raise AuthError("Nie zalogowano. Uruchom: gcalsync login")
-    try:
-        # Bez argumentu scopes: biblioteka nadpisałaby nim zakresy zapisane w tokenie,
-        # a chcemy sprawdzić, co Google faktycznie przyznał.
-        credentials = Credentials.from_authorized_user_file(str(paths.token))
-    except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
-        raise AuthError(
-            f"Uszkodzony plik tokenu {paths.token} ({exc}). Zaloguj się ponownie: gcalsync login"
-        ) from exc
+def _ready(credentials: Credentials) -> Credentials:
+    """Sprawdza zakres i w razie potrzeby odświeża token (bez przeglądarki)."""
     if not credentials.has_scopes(SCOPES):
         raise AuthError("Token nie ma wymaganego uprawnienia. Zaloguj się ponownie: gcalsync login")
     if credentials.valid:
@@ -98,8 +88,39 @@ def load_credentials(paths: Paths) -> Credentials:
         ) from exc
     except TransportError as exc:
         raise AuthError(f"Brak połączenia z Google podczas odświeżania tokenu: {exc}") from exc
-    write_private(paths.token, credentials.to_json().encode("utf-8"))
     return credentials
+
+
+def load_credentials(paths: Paths) -> Credentials:
+    """Wczytuje zapisany token i w razie potrzeby odświeża go (bez przeglądarki)."""
+    if not paths.token.exists():
+        raise AuthError("Nie zalogowano. Uruchom: gcalsync login")
+    try:
+        # Bez argumentu scopes: biblioteka nadpisałaby nim zakresy zapisane w tokenie,
+        # a chcemy sprawdzić, co Google faktycznie przyznał.
+        credentials = Credentials.from_authorized_user_file(str(paths.token))
+    except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
+        raise AuthError(
+            f"Uszkodzony plik tokenu {paths.token} ({exc}). Zaloguj się ponownie: gcalsync login"
+        ) from exc
+    was_valid = credentials.valid
+    credentials = _ready(credentials)
+    if not was_valid:
+        write_private(paths.token, credentials.to_json().encode("utf-8"))
+    return credentials
+
+
+def credentials_from_json(token_json: str) -> Credentials:
+    """Token z sekretu (np. GOOGLE_TOKEN_JSON w GitHub Actions) — zawartość pliku token.json."""
+    if not token_json.strip():
+        raise AuthError("Brak tokenu Google (GOOGLE_TOKEN_JSON).")
+    try:
+        credentials = Credentials.from_authorized_user_info(json.loads(token_json))
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        raise AuthError(
+            f"Niepoprawny token Google w GOOGLE_TOKEN_JSON ({type(exc).__name__})."
+        ) from exc
+    return _ready(credentials)
 
 
 def logout(paths: Paths) -> bool:

@@ -3,9 +3,8 @@
 Lokalna aplikacja z UI do synchronizacji planu zajęć WAT (eksport CSV „w formacie
 Outlooka” z ewig) z Google Calendar.
 
-Status: etapy 1–7 zrealizowane. Zapis `sync --apply` zweryfikowany przez użytkownika na
-prawdziwym kalendarzu „Plan WAT” (Windows). GUI (etap 7) przetestowane w przeglądarce
-na atrapie kalendarza; do sprawdzenia przez użytkownika z prawdziwym kontem Google.
+Status: etapy 1–6 zrealizowane i zweryfikowane na prawdziwym kalendarzu. Etap 7 (GUI) usunięty
+na rzecz pełnej automatyzacji (etap 9, sekcja niżej).
 
 Oznaczenia: **[zweryfikowane]** — potwierdzone w oficjalnej dokumentacji lub w plikach;
 **[niepotwierdzone]** — wniosek/pamięć, do sprawdzenia przy implementacji.
@@ -42,11 +41,11 @@ B — Analizy teledetekcyjne 30.
 ## 2. Stack i architektura
 
 - **Python ≥ 3.11**, zarządzanie środowiskiem przez **uv** (`uv run gcalsync …`).
-- **UI: NiceGUI** w przeglądarce na `127.0.0.1` (bez natywnego okna). Model zdarzeniowy
+- ~~**UI: NiceGUI**~~ (usunięte — patrz sekcja 9; zastąpione automatyzacją). Model zdarzeniowy
   (bez przeładowania całego skryptu jak w Streamlicie), gotowe upload/tabele/dialogi/postęp.
 - **Google:** `google-api-python-client`, `google-auth-oauthlib` (`InstalledAppFlow.run_local_server`).
 - **Inne:** `tzdata` (Windows), `platformdirs` (katalog konfiguracji, od etapu 4), `pytest`, `ruff`.
-- System docelowy: **Windows** (skrypt `start.bat` w etapie 8).
+- System docelowy: **Windows** lokalnie (CLI) i **GitHub Actions** (automatyzacja).
 
 Rdzeń (parsowanie, reguły, scalanie, diff) jest czystą logiką bez I/O; UI i CLI to cienkie
 warstwy nad nim.
@@ -66,7 +65,8 @@ src/gcalsync/
   gcal/                 # (etapy 5–6) auth, client, mapping, executor
   storage.py            # (etap 4) config.json, kopie plików, dziennik
   cli.py                # gcalsync preview / sync
-  ui/                   # (etap 7) NiceGUI
+  sources/ewig.py       # (etap 9) pobieranie planu z ewig
+  auto.py               # (etap 9) tryb automatyczny dla GitHub Actions
 tests/
 docs/PLAN.md
 ```
@@ -194,7 +194,7 @@ temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
 
 ---
 
-## 6. UI (NiceGUI, przeglądarka)
+## 6. UI (NiceGUI, przeglądarka) — usunięte, zastąpione automatyzacją (sekcja 9)
 
 1. **Źródła** — drag & drop, kodowanie (z ręczną zmianą), liczba wierszy, zakres dat,
    przedmioty z licznikami, ostrzeżenia; nazwa źródła; priorytet ↑↓; profile źródeł
@@ -263,15 +263,38 @@ temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
 6. ✅ Wykonanie planu: `sync --apply` z potwierdzeniem, dziennik, retry/backoff, bezpiecznik,
    weryfikacja po zapisie, testy na FakeCalendar (przerwanie i wznowienie, zgubiona odpowiedź,
    duplikat po ponowieniu, seria błędów, wygasła sesja).
-7. ✅ UI NiceGUI (ekrany 1–5): `gcalsync ui` / `start.bat`, tylko 127.0.0.1. Logika ekranów
+7. ~~UI NiceGUI~~ — zrealizowane, potem usunięte na rzecz automatyzacji (sekcja 9). Logika ekranów
    w `ui/controller.py` (testy pytest), widoki w `ui/app.py`. Zapis z GUI: plan liczony
    ponownie tuż przed zapisem, przy różnicy nic nie jest zapisywane (`PlanChangedError`).
-8. Dopracowanie: README z OAuth (✅), `start.bat` (✅).
+8. Dopracowanie: README z OAuth (✅).
+9. ✅ Automatyzacja: pobieranie z ewig, `gcalsync auto`, GitHub Actions co godzinę.
 
 ## Na później (poza v1)
 
 - łączenie par „przeniesione” w podglądzie,
 - kolory według typu zajęć,
 - widok tygodniowy,
-- testy UI (testy dymne NiceGUI),
-- automatyczne pobieranie planu z ewig (nowa implementacja `Source`).
+- ~~automatyczne pobieranie planu z ewig~~ — zrobione (sekcja 9).
+
+## 9. Automatyzacja (zastępuje GUI)
+
+Decyzje: pełna automatyzacja z minimalnym sterowaniem przez aplikację GitHub (wariant A);
+GUI (NiceGUI) usunięte; uruchomienie co pełną godzinę; grupy WIG23IX2S1 (priorytet 1)
+i WIG23IX1S1 (priorytet 2); semestr 2026/2027 zimowy (`iid=20261`); BIM zawsze wykluczany;
+logowanie z opcją „Aktualności”; ewig dostępny bez VPN.
+
+Ustalone z zapisanych stron ewig i ich JavaScriptu [zweryfikowane w plikach strony]:
+- logowanie: POST `index.php?sid=…` (`formname=login`, `default_fun=1`, `userid`, `password`
+  i pola ukryte formularza); `sid` sesji w `var sid = new String('…')`;
+- plan grupy: `logged.php?sid&mid=328&iid=20261&vrf=32820261&rdo=1&pos=0&exv=<grupa>`
+  + suma kontrolna `vrf=!<suma>` z `checkurl()`;
+- eksport (ikona „Zapisz formularz w pliku tekstowym w formacie OutLook”, `downloadCSV('TXT')`):
+  `prepareURL() + 'DTXT'` = `logged.php?…&exv=<grupa>&opr=DTXT` — plik generuje serwer;
+- wylogowanie: `index.php?sid=…&lou=1`.
+
+[niepotwierdzone do pierwszego uruchomienia] odpowiedź serwera na złe hasło i to, czy eksport
+wymaga wcześniejszego otwarcia planu (klient i tak je otwiera, jak przeglądarka).
+
+Bezpieczeństwo: każdy pobrany plik musi przejść parser bez błędów i mieć ≥ 1 zdarzenie;
+zapis z uruchomień cyklicznych tylko przy `auto_apply: true`; bezpiecznik masowego usuwania
+zatrzymuje zapis (kod 4) chyba że ręcznie zezwolono; tajne dane wyłącznie w sekretach GitHuba.

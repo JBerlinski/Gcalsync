@@ -3,8 +3,8 @@
 Lokalna aplikacja do synchronizacji planu zajęć WAT (eksport CSV „w formacie Outlooka”
 z ewig) z Google Calendar. Plan projektu i decyzje: [docs/PLAN.md](docs/PLAN.md).
 
-Stan: gotowe CLI i interfejs graficzny w przeglądarce (GUI) — źródła, reguły, podgląd,
-logowanie do Google, kalendarz docelowy, dry-run i zapis synchronizacji.
+Stan: pełna automatyzacja w GitHub Actions (pobieranie planu z ewig co godzinę i synchronizacja)
+oraz CLI do pracy lokalnej i diagnostyki.
 
 ## Wymagania
 
@@ -14,31 +14,40 @@ logowanie do Google, kalendarz docelowy, dry-run i zapis synchronizacji.
 
 Wszystkie polecenia uruchamiasz w katalogu repozytorium: `uv run gcalsync …`.
 
-## Interfejs graficzny (GUI)
+## Automatyzacja (GitHub Actions)
 
-```
-uv run gcalsync ui
-```
+Zadanie `.github/workflows/sync.yml` co pełną godzinę loguje się do ewig, pobiera plan grup
+(to samo co ikona eksportu „w formacie OutLook”), przepuszcza go przez reguły i synchronizuje
+kalendarz „Plan WAT”. Konfiguracja bez sekretów: [`gcalsync.config.json`](gcalsync.config.json)
+(grupy i ich priorytet, semestr, reguły, szablon tytułu, ID kalendarza, `auto_apply`).
 
-albo dwuklik na `start.bat`. Otworzy się przeglądarka z adresem `http://127.0.0.1:8765`
-(GUI jest dostępne tylko z tego komputera). Zamknięcie: Ctrl+C albo zamknięcie okna konsoli.
-Opcje: `--port N`, `--no-browser`.
+Zapis następuje tylko, gdy: pliki z ewig pobrały się i nie mają błędów, kalendarz jest dostępny
+i nie zadziałał bezpiecznik masowego usuwania. Inaczej zadanie kończy się błędem (e-mail od
+GitHuba), a kalendarz zostaje nietknięty. Podsumowanie zmian jest w raporcie uruchomienia,
+a pobrane pliki i dziennik w artefakcie (7 dni).
 
-Zakładki odpowiadają kolejnym krokom:
+**Sterowanie z telefonu:** aplikacja GitHub → repozytorium → Actions → „Synchronizacja planu”
+→ „Run workflow” (opcje: zapis / tylko dry-run, zgoda na masowe usuwanie), historia uruchomień
+i podsumowania. `auto_apply` w `gcalsync.config.json` włącza zapis z uruchomień cyklicznych
+(do edycji także z telefonu).
 
-1. **Źródła** — wgrywanie plików CSV (przeciągnij albo kliknij +), nazwa nowego źródła albo
-   podmiana pliku istniejącego, kolejność (priorytet) strzałkami, kodowanie, zmiana nazwy,
-   usuwanie. Przy każdym źródle: liczba zdarzeń, zakres dat, przedmioty, ostrzeżenia.
-2. **Reguły** — szybkie wykluczenie przedmiotu z listy przedmiotów z plików, reguły
-   zaawansowane (pole, warunek, źródła, daty), włączanie/wyłączanie z licznikiem trafień.
-3. **Podgląd** — co trafi do kalendarza, wykluczone, konflikty, duplikaty, kolizje, błędy.
-4. **Kalendarz** — logowanie do Google, kalendarz docelowy, szablon tytułu, polityka konfliktów.
-5. **Synchronizacja** — „Sprawdź zmiany” (dry-run) i „Zapisz w kalendarzu” z potwierdzeniem
-   (przy dużej liczbie usunięć trzeba wpisać ich liczbę), postęp zapisu i weryfikacja.
-   Tuż przed zapisem plan jest liczony ponownie — jeśli coś się zmieniło od podglądu,
-   nic nie zostanie zapisane.
+### Jednorazowa konfiguracja
 
-GUI i CLI korzystają z tych samych danych — zmiany zrobione w jednym są widoczne w drugim.
+1. **Google Cloud → Google Auth Platform → Audience → „Publish app”** (tryb *In production*).
+   W trybie *Testing* token wygasa po 7 dniach i automat by stanął.
+2. Nowy token (już w trybie *In production*): `uv run gcalsync logout`, potem
+   `uv run gcalsync login`.
+3. **GitHub → Settings → Secrets and variables → Actions → New repository secret:**
+   - `EWIG_LOGIN`, `EWIG_PASSWORD` — dane do ewig,
+   - `GOOGLE_TOKEN_JSON` — cała zawartość `%LOCALAPPDATA%\gcalsync\token.json`
+     (PowerShell: `Get-Content $env:LOCALAPPDATA\gcalsync\token.json | Set-Clipboard`).
+4. Workflow musi być na gałęzi domyślnej (`main`) — harmonogram i przycisk „Run workflow”
+   działają tylko stamtąd.
+5. Pierwsze uruchomienie ręcznie, bez zapisu. Gdy podsumowanie się zgadza, ustaw
+   `"auto_apply": true` w `gcalsync.config.json`.
+
+Lokalnie to samo: `uv run gcalsync auto` (dry-run) lub `--apply`, z tymi samymi zmiennymi
+środowiskowymi.
 
 ## Dane lokalne (poza repozytorium)
 
@@ -113,7 +122,7 @@ weryfikacji (dozwolone do użytku osobistego, z ekranem „unverified app”) do
 wymienia limitu 7 dni, ale też nie mówi wprost, że go nie ma.
 
 Kody wyjścia: `0` — OK, `1` — błędy w plikach CSV, `2` — błędne wywołanie lub konfiguracja,
-`3` — błąd logowania lub Google API.
+`3` — błąd ewig, logowania lub Google API, `4` — zatrzymane przez bezpiecznik (tylko `auto`).
 
 ## Rozwój
 
@@ -126,4 +135,5 @@ uv run ruff format --check .
 Test „złoty” (`tests/golden/samples_bim_excluded.json`) utrwala wynik potoku na plikach
 z `samples/`. Po świadomej zmianie wyniku: `UPDATE_GOLDEN=1 uv run pytest tests/test_pipeline.py`.
 Integracja z Google jest testowana na atrapie (`tests/fake_calendar.py`) i na
-`HttpMockSequence` z google-api-python-client — testy nie łączą się z siecią.
+`HttpMockSequence` z google-api-python-client, a pobieranie z ewig na atrapie serwera
+(`tests/fake_ewig.py`) — testy nie łączą się z siecią.

@@ -7,8 +7,8 @@ requires-python = ">=3.11"
 dependencies = [
     "google-api-python-client>=2.200.0",
     "google-auth-oauthlib>=1.4.1",
-    "nicegui>=3.17.1",
     "platformdirs>=4.11.12",
+    "requests>=2.34.2",
     # zoneinfo na Windows nie ma systemowej bazy stref czasowych i korzysta z tego pakietu.
     "tzdata",
 ]
