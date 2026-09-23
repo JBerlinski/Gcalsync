@@ -42,6 +42,7 @@ def config(api, tmp_path):
     cal = api.create_calendar("Plan WAT", "Europe/Warsaw", "x")
     data = json.loads(REPO_CONFIG.read_text("utf-8"))
     data["calendar"]["id"] = cal["id"]
+    data["auto_apply"] = False  # testy włączają zapis cykliczny same, gdy go potrzebują
     path = tmp_path / "gcalsync.config.json"
     path.write_text(json.dumps(data), "utf-8")
     return load_auto_config(path)
@@ -65,7 +66,7 @@ def test_repo_config_is_valid():
     assert [g.code for g in config.groups] == ["WIG23IX2S1", "WIG23IX1S1"]
     assert config.semester_iid == 20261
     assert config.rules[0].value == "Modelowanie danych do BIM"
-    assert config.auto_apply is False  # zapis cykliczny włączany świadomie po pierwszym dry-runie
+    assert config.auto_apply is True  # włączone po udanym dry-runie i ręcznym zapisie
 
 
 def test_dry_run_writes_nothing(config, api):
