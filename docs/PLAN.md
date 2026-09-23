@@ -3,8 +3,8 @@
 Lokalna aplikacja z UI do synchronizacji planu zajęć WAT (eksport CSV „w formacie
 Outlooka” z ewig) z Google Calendar.
 
-Status: plan zaakceptowany. Etapy 1–3 w realizacji; po etapie 3 przerwa na weryfikację
-podglądu CLI na prawdziwych plikach, zanim ruszy integracja z Google.
+Status: etapy 1–6 zrealizowane i zweryfikowane na prawdziwym kalendarzu. Etap 7 (GUI) usunięty
+na rzecz pełnej automatyzacji (etap 9, sekcja niżej).
 
 Oznaczenia: **[zweryfikowane]** — potwierdzone w oficjalnej dokumentacji lub w plikach;
 **[niepotwierdzone]** — wniosek/pamięć, do sprawdzenia przy implementacji.
@@ -41,11 +41,11 @@ B — Analizy teledetekcyjne 30.
 ## 2. Stack i architektura
 
 - **Python ≥ 3.11**, zarządzanie środowiskiem przez **uv** (`uv run gcalsync …`).
-- **UI: NiceGUI** w przeglądarce na `127.0.0.1` (bez natywnego okna). Model zdarzeniowy
+- ~~**UI: NiceGUI**~~ (usunięte — patrz sekcja 9; zastąpione automatyzacją). Model zdarzeniowy
   (bez przeładowania całego skryptu jak w Streamlicie), gotowe upload/tabele/dialogi/postęp.
 - **Google:** `google-api-python-client`, `google-auth-oauthlib` (`InstalledAppFlow.run_local_server`).
 - **Inne:** `tzdata` (Windows), `platformdirs` (katalog konfiguracji, od etapu 4), `pytest`, `ruff`.
-- System docelowy: **Windows** (skrypt `start.bat` w etapie 8).
+- System docelowy: **Windows** lokalnie (CLI) i **GitHub Actions** (automatyzacja).
 
 Rdzeń (parsowanie, reguły, scalanie, diff) jest czystą logiką bez I/O; UI i CLI to cienkie
 warstwy nad nim.
@@ -65,14 +65,16 @@ src/gcalsync/
   gcal/                 # (etapy 5–6) auth, client, mapping, executor
   storage.py            # (etap 4) config.json, kopie plików, dziennik
   cli.py                # gcalsync preview / sync
-  ui/                   # (etap 7) NiceGUI
+  sources/ewig.py       # (etap 9) pobieranie planu z ewig
+  auto.py               # (etap 9) tryb automatyczny dla GitHub Actions
 tests/
 docs/PLAN.md
 ```
 
-**Dane lokalne poza repozytorium** — `platformdirs.user_config_dir("gcalsync")`
-(Windows: `%APPDATA%\gcalsync` lub `%LOCALAPPDATA%\…` — dokładna ścieżka zależy od
-`platformdirs`, zostanie wypisana przez aplikację), nadpisywalne zmienną `GCALSYNC_HOME`:
+**Dane lokalne poza repozytorium** — `platformdirs.user_config_dir("gcalsync",
+appauthor=False, roaming=False)`; na Windows `%LOCALAPPDATA%\gcalsync`, czyli
+`C:\Users\<nazwa>\AppData\Local\gcalsync` [zweryfikowane w kodzie platformdirs];
+`gcalsync paths` wypisuje faktyczną ścieżkę. Nadpisywalne zmienną `GCALSYNC_HOME`:
 `client_secret.json`, `token.json`, `config.json` (źródła, priorytety, reguły, ID kalendarza,
 szablon tytułu), `files/` (kopie wgranych CSV — decyzja: tak, nigdy w repo), `runs/*.jsonl`
 (dziennik). `.gitignore` dodatkowo wyklucza sekrety i tokeny.
@@ -89,8 +91,10 @@ Event: source_id, row, subject_raw, course, kind, seq, location_raw, location, s
   Bez `[n]` (numeracja może się przesunąć), bez lokalizacji (zmiana sali = aktualizacja),
   bez źródła (zmiana pliku/priorytetu nie zmienia zdarzenia w kalendarzu).
 - Przeniesienie zajęć na inny termin = usunięcie + dodanie.
-- **Hash treści** (etap 5) liczony z faktycznych pól zdarzenia w Google (tytuł, lokalizacja,
-  opis, start, koniec) → wykrywa też ręczne edycje; w v1 synchronizacja je nadpisuje.
+- **Wykrywanie zmian** (etap 5): porównanie pól faktycznego zdarzenia w Google (tytuł, sala,
+  opis, początek i koniec w UTC) z docelowymi — zamiast zapisanego hasha, więc wykrywa też
+  ręczne edycje; w v1 synchronizacja je nadpisuje. Przypomnienia nie są porównywane
+  (`reminders.useDefault = true` ustawiane tylko przy dodaniu).
 
 **Tytuł** z szablonu (ustawienia), domyślnie `{course} ({kind})`, np. `Geowizualizacja (L)`;
 dla tematu bez typu — sam przedmiot. Numer `[n]`, pełny temat i źródło trafiają do opisu.
@@ -105,7 +109,8 @@ Kolejność: parsowanie → wykluczenia → deduplikacja → konflikty → stan 
   typ / lokalizacja), operator (zawiera / równa się / regex), wielkość liter (domyślnie
   ignorowana), zakres źródeł (domyślnie wszystkie), opcjonalny zakres dat, włączona/wyłączona.
   Każde wykluczone zdarzenie pamięta regułę. Porównania po normalizacji białych znaków (NFC).
-  Reguła domyślna (decyzja): **przedmiot równa się „Modelowanie danych do BIM”, wszystkie źródła**.
+  Reguła (decyzja): **przedmiot równa się „Modelowanie danych do BIM”, wszystkie źródła** —
+  nie jest wbudowana, dodaje się ją raz: `gcalsync rules add --course "Modelowanie danych do BIM"`.
 - **Deduplikacja:** grupowanie po kluczu; zostaje egzemplarz ze źródła o najwyższym priorytecie
   (w obrębie jednego pliku — pierwszy wiersz); raport „występuje też w…” i rozbieżności pól.
 - **Konflikty** (nakładanie `a.start < b.end && b.start < a.end`; stykanie się to nie kolizja):
@@ -139,20 +144,28 @@ calendars, and see, create, change, and delete events on them”; autoryzuje `ca
 `calendars.get`; `calendar.calendarlist.readonly` nie jest dodawany (decyzja).
 
 **Znacznik:** `extendedProperties.private = {gcalsync_managed: "1", gcalsync_key, gcalsync_v: "1"}`.
-Pobieranie przez `events.list?privateExtendedProperty=gcalsync_managed=1` [zweryfikowane].
+Odczyt: `events.list` (singleEvents, bez usuniętych, strony po 2500) całego kalendarza
+i podział lokalny na zarządzane / niezarządzane — dzięki temu podgląd pokazuje też liczbę
+zdarzeń niezarządzanych. (Filtr `privateExtendedProperty` jest dostępny [zweryfikowane],
+ale nie jest potrzebny.)
 Limity: klucz ≤ 44 znaki, wartość ≤ 1024, ≤ 300 właściwości / 32 kB [zweryfikowane].
 Zdarzenia bez znacznika — nigdy nie modyfikowane, tylko liczone w podglądzie.
 
 **Synchronizacja przyrostowa:** D = stan docelowy, C = zarządzane zdarzenia w Google.
 Dodaj D−C, zaktualizuj różne treścią, usuń C−D, usuń nadmiarowe duplikaty klucza w C.
 
-**Zakres, w którym aplikacja może cokolwiek zmieniać** (decyzje 6 i 7):
+**Zakres, w którym aplikacja może cokolwiek zmieniać** (decyzje 6 i 7, zaakceptowane):
 - zdarzenia zakończone (`end ≤ teraz`) są poza synchronizacją — nie są dodawane, zmieniane
   ani usuwane;
 - usuwać/zmieniać wolno tylko zarządzane zdarzenia mieszczące się w **oknie pokrycia**
   wgranych plików: od najwcześniejszego początku do najpóźniejszego końca wśród
   wszystkich sparsowanych zdarzeń (także wykluczonych). Zdarzenia poza oknem zostają
-  nietknięte. Okno jest pokazywane w podglądzie.
+  nietknięte. Okno jest pokazywane w podglądzie;
+- duplikaty (ten sam klucz więcej niż raz) są usuwane tylko w tym samym zakresie; zostaje
+  egzemplarz, który już ma docelową treść;
+- zarządzane zdarzenie ze znacznikiem bez klucza jest raportowane i nieruszane;
+- reguły ograniczone wyłącznie do usuwanego źródła są usuwane razem z nim (zamiast stać się
+  globalnymi).
 
 **Pola zdarzenia:** `summary` (szablon), `location`, `description` (przedmiot, typ, numer,
 temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
@@ -170,13 +183,18 @@ temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
   Tempo ok. 5 zapytań/s, ponawianie przy 403/429 (rate limit) i 5xx. Dokładne wartości
   `reason` w odpowiedziach błędów [niepotwierdzone] — obsługa oprze się na kodzie HTTP
   i sprawdzi `reason`, gdy jest dostępny;
-- bezpiecznik: usunięcie ponad X% zarządzanych zdarzeń → dodatkowe potwierdzenie;
+- bezpiecznik: co najmniej 5 usunięć nieaktualnych zdarzeń i ponad 30% zarządzanych
+  zdarzeń w zakresie → ostrzeżenie w dry-run i dodatkowe potwierdzenie przy zapisie;
+- odczyty: wbudowane `num_retries` google-api-python-client — ponawia 5xx, 429, 403
+  z `rateLimitExceeded`/`userRateLimitExceeded` i błędy połączenia, z wykładniczym
+  opóźnieniem [zweryfikowane w kodzie biblioteki]; `calendars.insert` bez ponawiania
+  (ryzyko utworzenia dwóch kalendarzy);
 - `invalid_grant` → komunikat „zaloguj się ponownie”;
 - **dry-run domyślnie**; zapis tylko po potwierdzeniu (UI) lub z `--apply` (CLI).
 
 ---
 
-## 6. UI (NiceGUI, przeglądarka)
+## 6. UI (NiceGUI, przeglądarka) — usunięte, zastąpione automatyzacją (sekcja 9)
 
 1. **Źródła** — drag & drop, kodowanie (z ręczną zmianą), liczba wierszy, zakres dat,
    przedmioty z licznikami, ostrzeżenia; nazwa źródła; priorytet ↑↓; profile źródeł
@@ -235,20 +253,48 @@ temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
 
 ## 9. Etapy (commity na jednej gałęzi)
 
-1. Szkielet: `pyproject.toml` (uv), ruff, pytest, `.gitignore`, README.
-2. Model + parser CSV z heurystyką kodowania + testy na próbkach.
-3. Reguły, deduplikacja, konflikty, potok, CLI `gcalsync preview` (bez Google), test złoty.
+1. ✅ Szkielet: `pyproject.toml` (uv), ruff, pytest, `.gitignore`, README.
+2. ✅ Model + parser CSV z heurystyką kodowania + testy na próbkach.
+3. ✅ Reguły, deduplikacja, konflikty, potok, CLI `gcalsync preview` (bez Google), test złoty.
    **Przerwa: weryfikacja podglądu CLI na prawdziwych plikach.**
-4. Trwała konfiguracja (źródła, priorytety, reguły, szablon tytułu, kopie CSV).
-5. Google: OAuth, utworzenie/wybór kalendarza, odczyt, diff (dry-run na prawdziwym kalendarzu).
-6. Wykonanie planu: dziennik, retry/backoff, bezpiecznik, testy na FakeCalendar.
-7. UI NiceGUI (ekrany 1–5).
-8. Dopracowanie: README z OAuth, `start.bat`.
+4. ✅ Trwała konfiguracja (źródła, priorytety, reguły, szablon tytułu, kopie CSV).
+5. ✅ Google: OAuth, utworzenie/wybór kalendarza, odczyt, diff (dry-run).
+   **Przerwa: dry-run na prawdziwym kalendarzu przed zapisem.**
+6. ✅ Wykonanie planu: `sync --apply` z potwierdzeniem, dziennik, retry/backoff, bezpiecznik,
+   weryfikacja po zapisie, testy na FakeCalendar (przerwanie i wznowienie, zgubiona odpowiedź,
+   duplikat po ponowieniu, seria błędów, wygasła sesja).
+7. ~~UI NiceGUI~~ — zrealizowane, potem usunięte na rzecz automatyzacji (sekcja 9). Logika ekranów
+   w `ui/controller.py` (testy pytest), widoki w `ui/app.py`. Zapis z GUI: plan liczony
+   ponownie tuż przed zapisem, przy różnicy nic nie jest zapisywane (`PlanChangedError`).
+8. Dopracowanie: README z OAuth (✅).
+9. ✅ Automatyzacja: pobieranie z ewig, `gcalsync auto`, GitHub Actions co godzinę.
 
 ## Na później (poza v1)
 
 - łączenie par „przeniesione” w podglądzie,
 - kolory według typu zajęć,
 - widok tygodniowy,
-- testy UI (testy dymne NiceGUI),
-- automatyczne pobieranie planu z ewig (nowa implementacja `Source`).
+- ~~automatyczne pobieranie planu z ewig~~ — zrobione (sekcja 9).
+
+## 9. Automatyzacja (zastępuje GUI)
+
+Decyzje: pełna automatyzacja z minimalnym sterowaniem przez aplikację GitHub (wariant A);
+GUI (NiceGUI) usunięte; uruchomienie co pełną godzinę; grupy WIG23IX2S1 (priorytet 1)
+i WIG23IX1S1 (priorytet 2); semestr 2026/2027 zimowy (`iid=20261`); BIM zawsze wykluczany;
+logowanie z opcją „Aktualności”; ewig dostępny bez VPN.
+
+Ustalone z zapisanych stron ewig i ich JavaScriptu [zweryfikowane w plikach strony]:
+- logowanie: POST `index.php?sid=…` (`formname=login`, `default_fun=1`, `userid`, `password`
+  i pola ukryte formularza); `sid` sesji w `var sid = new String('…')`;
+- plan grupy: `logged.php?sid&mid=328&iid=20261&vrf=32820261&rdo=1&pos=0&exv=<grupa>`
+  + suma kontrolna `vrf=!<suma>` z `checkurl()`;
+- eksport (ikona „Zapisz formularz w pliku tekstowym w formacie OutLook”, `downloadCSV('TXT')`):
+  `prepareURL() + 'DTXT'` = `logged.php?…&exv=<grupa>&opr=DTXT` — plik generuje serwer;
+- wylogowanie: `index.php?sid=…&lou=1`.
+
+[niepotwierdzone do pierwszego uruchomienia] odpowiedź serwera na złe hasło i to, czy eksport
+wymaga wcześniejszego otwarcia planu (klient i tak je otwiera, jak przeglądarka).
+
+Bezpieczeństwo: każdy pobrany plik musi przejść parser bez błędów i mieć ≥ 1 zdarzenie;
+zapis z uruchomień cyklicznych tylko przy `auto_apply: true`; bezpiecznik masowego usuwania
+zatrzymuje zapis (kod 4) chyba że ręcznie zezwolono; tajne dane wyłącznie w sekretach GitHuba.

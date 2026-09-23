@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "ewig": {
+    "semester_iid": 20261,
+    "groups": [
+      { "code": "WIG23IX2S1", "name": "Grupa kierunkowa" },
+      { "code": "WIG23IX1S1", "name": "Grupa domyślna" }
+    ]
+  },
+  "rules": [
+    { "field": "course", "op": "equals", "value": "Modelowanie danych do BIM" }
+  ],
+  "policy": "priority",
+  "title_template": "{course} ({kind})",
+  "calendar": {
+    "id": "fe3cc06d2d1a57c87c6d2fb0401eafce74c9ff6fcab223f715bffc6391715dd8@group.calendar.google.com",
+    "summary": "Plan WAT"
+  },
+  "auto_apply": false
+}

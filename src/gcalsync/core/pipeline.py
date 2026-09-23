@@ -76,8 +76,12 @@ class PreviewResult:
         counts = Counter(id(x.rule) for x in self.excluded)
         return [counts[id(rule)] for rule in self.rules]
 
+    @property
+    def source_names(self) -> dict[str, str]:
+        return {s.id: s.name for s in self.sources}
+
     def source_name(self, source_id: str) -> str:
-        return next((s.name for s in self.sources if s.id == source_id), source_id)
+        return self.source_names.get(source_id, source_id)
 
 
 def course_label(event: Event) -> str:

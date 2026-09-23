@@ -155,7 +155,7 @@ def test_duplicate_across_files_keeps_higher_priority_and_reports_difference():
     assert group.kept.location == "18 58"
     assert [e.source_id for e in group.dropped] == ["B"]
     assert len(group.differences) == 1
-    assert "13 58" in group.differences[0]
+    assert "13 58" in group.differences[0].describe()
 
 
 def test_duplicate_with_different_number_is_still_duplicate():
@@ -163,7 +163,7 @@ def test_duplicate_with_different_number_is_still_duplicate():
     b = events_from(row("Geo (L) [4]"), source_id="B")
     unique, [group] = deduplicate(a + b, {"A": 0, "B": 1})
     assert len(unique) == 1
-    assert "numer zajęć" in group.differences[0]
+    assert "numer zajęć" in group.differences[0].describe()
 
 
 def test_identical_duplicate_has_no_differences():
