@@ -3,9 +3,9 @@
 Klient robi to samo co przeglądarka (ustalone z zapisanych stron i ich JavaScriptu):
 1. GET strony logowania — identyfikator sesji `sid` jest w adresie formularza,
 2. POST formularza logowania (`formname=login`, `default_fun=1` = „Aktualności”),
-3. dla każdej grupy: GET pozycji menu „Rozkład zajęć grupy”, GET planu grupy (`mid=328`, `iid=<semestr>`, `exv=<kod grupy>`),
-   potem GET eksportu „w formacie Outlooka” (`opr=DTXT`, to samo co ikona eksportu),
-4. wylogowanie (`index.php?sid=…&lou=1`).
+3. GET pozycji menu „Rozkład zajęć grupy”, GET planu grupy (`mid=328`, `iid=<semestr>`,
+   `exv=<kod grupy>`), potem GET eksportu „w formacie Outlooka” (`opr=DTXT`, jak ikona eksportu),
+4. wylogowanie (`index.php?sid=…&lou=1`) — kroki 1–4 osobno dla każdej grupy.
 
 Hasło nie jest nigdzie logowane ani umieszczane w komunikatach błędów.
 """
@@ -181,6 +181,9 @@ class EwigClient:
         return response.content.decode(PAGE_ENCODING, errors="replace")
 
     def login(self) -> str:
+        # Czysta sesja: bez ciasteczek i nagłówka Referer z poprzedniego logowania.
+        self.session.cookies.clear()
+        self._referer = None
         page = self._text(self._get(BASE_URL, "strona logowania"))
         form = _LoginFormParser()
         form.feed(page)
@@ -228,32 +231,61 @@ class EwigClient:
             self.sid = None
 
 
+def _check_export(group: str, data: bytes, events, previous: dict[str, bytes]) -> None:
+    """Wykrywa pliki sklejone przez ewig z poprzednim eksportem.
+
+    ewig buduje eksport w pliku tymczasowym sesji. W jednej sesji drugi eksport potrafił
+    mieć na początku bajty pierwszego (cały plik poprzedniej grupy, potem reszta nowego,
+    urwana w połowie wiersza). Chroni przed tym osobna sesja dla każdej grupy, a to jest
+    druga linia obrony: plik zaczynający się od innego eksportu albo z wierszami nie po
+    kolei (ewig zawsze sortuje zajęcia chronologicznie) jest odrzucany.
+    """
+    for other, other_data in previous.items():
+        glued = data.startswith(other_data) or other_data.startswith(data)
+        if other_data and len(other_data) != len(data) and glued:
+            raise EwigError(
+                f"Plik grupy {group} jest sklejony z plikiem grupy {other} "
+                "(błąd eksportu ewig) — pomijam synchronizację."
+            )
+    starts = [(e.start_date, e.start_time) for e in events]
+    for row_event, prev_start, start in zip(events[1:], starts, starts[1:], strict=False):
+        if start < prev_start:
+            raise EwigError(
+                f"Plik grupy {group} ma zajęcia nie po kolei (wiersz {row_event.row}: "
+                f"„{row_event.subject}”) — wygląda na uszkodzony eksport ewig, "
+                "pomijam synchronizację."
+            )
+
+
 def fetch_sources(
     client: EwigClient, semester_iid: int, groups: list[EwigGroup]
 ) -> list[CsvFileSource]:
-    """Loguje się, pobiera CSV wszystkich grup (w kolejności priorytetu) i się wylogowuje.
+    """Pobiera CSV wszystkich grup (w kolejności priorytetu), każdą w osobnej sesji ewig.
 
-    Każdy plik musi przejść parser bez błędów i zawierać co najmniej jedno zdarzenie —
-    inaczej EwigError (lepiej nie synchronizować niż usunąć zajęcia przez zły plik).
+    Osobne logowanie dla każdej grupy, bo ewig trzyma eksport w pliku tymczasowym sesji
+    i w jednej sesji potrafi skleić drugi plik z pierwszym (patrz _check_export).
+    Każdy plik musi przejść parser bez błędów, zawierać co najmniej jedno zdarzenie i być
+    spójny — inaczej EwigError (lepiej nie synchronizować niż usunąć zajęcia przez zły plik).
     """
-    client.login()
-    try:
-        sources = []
-        for group in groups:
+    sources = []
+    fetched: dict[str, bytes] = {}
+    for group in groups:
+        client.login()
+        try:
             data = client.fetch_group_csv(semester_iid, group.code)
-            parsed = parse_outlook_csv(data, source_id=group.name)
-            errors = [i for i in parsed.issues if i.level == "error"]
-            if errors:
-                raise EwigError(
-                    f"Plik grupy {group.code} ma błędy: " + "; ".join(str(e) for e in errors[:3])
-                )
-            if not parsed.events:
-                raise EwigError(f"Plik grupy {group.code} nie zawiera żadnych zdarzeń.")
-            sources.append(
-                CsvFileSource(
-                    id=group.name, name=group.name, data=data, filename=f"{group.code}.csv"
-                )
+        finally:
+            client.logout()
+        parsed = parse_outlook_csv(data, source_id=group.name)
+        errors = [i for i in parsed.issues if i.level == "error"]
+        if errors:
+            raise EwigError(
+                f"Plik grupy {group.code} ma błędy: " + "; ".join(str(e) for e in errors[:3])
             )
-        return sources
-    finally:
-        client.logout()
+        if not parsed.events:
+            raise EwigError(f"Plik grupy {group.code} nie zawiera żadnych zdarzeń.")
+        _check_export(group.code, data, parsed.events, fetched)
+        fetched[group.code] = data
+        sources.append(
+            CsvFileSource(id=group.name, name=group.name, data=data, filename=f"{group.code}.csv")
+        )
+    return sources

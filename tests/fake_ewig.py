@@ -55,6 +55,10 @@ class FakeEwig(BaseAdapter):
         self.logged_in = False
         self.log: list[tuple[str, str, dict]] = []
         self.overrides: dict[str, tuple[int, bytes]] = {}  # opr/ścieżka -> odpowiedź
+        # Błąd prawdziwego ewig: eksport w pliku tymczasowym sesji; kolejny eksport w tej samej
+        # sesji ma na początku bajty poprzedniego (cały poprzedni plik, dalej reszta nowego).
+        self.session_export: bytes = b""
+        self.logins = 0
 
     def _response(self, request, status: int, body: bytes) -> requests.Response:
         response = requests.Response()
@@ -93,6 +97,9 @@ class FakeEwig(BaseAdapter):
         elif url.path == "/ed2/index.php" and request.method == "POST":
             ok = form.get("password") == [self.password] and form.get("formname") == ["login"]
             self.logged_in = ok
+            if ok:
+                self.logins += 1
+                self.session_export = b""
             page = LOGGED_PAGE if ok else LOGIN_PAGE
         elif url.path == "/ed2/index.php" and query.get("lou") == ["1"]:
             self.logged_in = False
@@ -108,7 +115,10 @@ class FakeEwig(BaseAdapter):
                 group = query["exv"][0]
                 if group not in self.files:
                     return self._response(request, 200, b"<html>brak grupy</html>")
-                return self._response(request, 200, self.files[group])
+                new = self.files[group]
+                glued = self.session_export + new[len(self.session_export) :]
+                self.session_export = new
+                return self._response(request, 200, glued)
             else:
                 page = plan_page(query["exv"][0])
         else:
