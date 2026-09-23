@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gcalsync</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; color: #1f2328; background: #fff; }
+  h1 { margin-bottom: .2rem; } .muted { color: #59636e; }
+</style>
+</head>
+<body>
+<h1>gcalsync</h1>
+<p class="muted">Prywatne narzędzie do synchronizacji planu zajęć z Kalendarzem Google.</p>
+
+<p>gcalsync pobiera plan zajęć moich grup studenckich z e-Dziekanatu i zapisuje go
+w osobnym kalendarzu Google „Plan WAT”, utworzonym przez to narzędzie. Działa
+automatycznie (GitHub Actions) i jest używane wyłącznie przez autora na jego własnym koncie Google.</p>
+
+<p>Narzędzie ma dostęp tylko do kalendarzy, które samo utworzyło
+(zakres <code>https://www.googleapis.com/auth/calendar.app.created</code>).
+Nie widzi innych kalendarzy ani wydarzeń na koncie.</p>
+
+<p><a href="privacy.html">Polityka prywatności</a> ·
+<a href="https://github.com/JBerlinski">Kontakt (GitHub)</a> ·
+<a href="https://github.com/JBerlinski/Gcalsync">Kod źródłowy</a></p>
+
+<hr>
+<p lang="en" class="muted"><strong>English:</strong> gcalsync is a personal tool that syncs the author's
+university timetable into a dedicated Google Calendar it created. It only accesses calendars
+created by the app itself (<code>calendar.app.created</code> scope) and is used solely by its author.
+See the <a href="privacy.html">privacy policy</a>.</p>
+</body>
+</html>
