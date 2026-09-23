@@ -2,10 +2,12 @@ name: Synchronizacja planu
 
 on:
   schedule:
-    # Co pełną godzinę (UTC, ale przesunięcie Polski to pełne godziny, więc wypada o pełnej
-    # godzinie także w Warszawie). Przy braku zmian synchronizacja niczego nie zapisuje.
+    # 0:00, 6:00, 12:00 i 18:00 czasu polskiego. Cron działa w UTC, a Polska ma +1 zimą
+    # i +2 latem, więc uruchamiamy się w obu kandydackich godzinach UTC, a krok „Pora
+    # uruchomienia” przepuszcza tylko tę, która w Warszawie wypada o 0, 6, 12 lub 18.
+    # Przy braku zmian synchronizacja niczego nie zapisuje.
     # Zapis z uruchomień cyklicznych tylko, gdy w gcalsync.config.json jest "auto_apply": true.
-    - cron: "0 * * * *"
+    - cron: "0 4,5,10,11,16,17,22,23 * * *"
   workflow_dispatch:
     inputs:
       apply:
@@ -29,18 +31,35 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Pora uruchomienia
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          hour=$(TZ=Europe/Warsaw date +%H)
+          if [ "$EVENT" != "schedule" ] || [ $((10#$hour % 6)) -eq 0 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "W Warszawie jest ${hour}:xx — to nie jest 0, 6, 12 ani 18. Pomijam."
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'true'
         with:
           python-version: "3.12"
 
       - name: Instalacja
+        if: steps.gate.outputs.run == 'true'
         run: |
           python -m pip install --quiet uv
           uv sync --frozen --no-dev
 
       - name: Synchronizacja
+        if: steps.gate.outputs.run == 'true'
         env:
           EWIG_LOGIN: ${{ secrets.EWIG_LOGIN }}
           EWIG_PASSWORD: ${{ secrets.EWIG_PASSWORD }}
@@ -50,7 +69,7 @@ jobs:
         run: uv run --frozen --no-dev gcalsync auto $MODE $MASS --save-dir run-output --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Pliki z ewig i dziennik (7 dni)
-        if: always()
+        if: always() && steps.gate.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: gcalsync-${{ github.run_id }}

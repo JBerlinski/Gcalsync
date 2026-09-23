@@ -3,7 +3,7 @@
 Lokalna aplikacja do synchronizacji planu zajęć WAT (eksport CSV „w formacie Outlooka”
 z ewig) z Google Calendar. Plan projektu i decyzje: [docs/PLAN.md](docs/PLAN.md).
 
-Stan: pełna automatyzacja w GitHub Actions (pobieranie planu z ewig co godzinę i synchronizacja)
+Stan: pełna automatyzacja w GitHub Actions (pobieranie planu z ewig o 0:00, 6:00, 12:00 i 18:00 i synchronizacja)
 oraz CLI do pracy lokalnej i diagnostyki.
 
 ## Wymagania
@@ -16,9 +16,9 @@ Wszystkie polecenia uruchamiasz w katalogu repozytorium: `uv run gcalsync …`.
 
 ## Automatyzacja (GitHub Actions)
 
-Zadanie `.github/workflows/sync.yml` co pełną godzinę loguje się do ewig, pobiera plan grup
-(to samo co ikona eksportu „w formacie OutLook”), przepuszcza go przez reguły i synchronizuje
-kalendarz „Plan WAT”. Konfiguracja bez sekretów: [`gcalsync.config.json`](gcalsync.config.json)
+Zadanie `.github/workflows/sync.yml` o 0:00, 6:00, 12:00 i 18:00 (czas polski) loguje się
+do ewig, pobiera plan grup (to samo co ikona eksportu „w formacie OutLook”), przepuszcza go
+przez reguły i synchronizuje kalendarz „Plan WAT”. Konfiguracja bez sekretów: [`gcalsync.config.json`](gcalsync.config.json)
 (grupy i ich priorytet, semestr, reguły, szablon tytułu, ID kalendarza, `auto_apply`).
 
 Zapis następuje tylko, gdy: pliki z ewig pobrały się i nie mają błędów, kalendarz jest dostępny
