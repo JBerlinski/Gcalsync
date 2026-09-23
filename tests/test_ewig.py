@@ -2,7 +2,7 @@ from urllib.parse import parse_qsl, urlparse
 
 import pytest
 import requests
-from conftest import DEFAULT_GROUP, NEW_GROUP, make_csv
+from conftest import DEFAULT_GROUP, NEW_GROUP, make_csv, row
 from fake_ewig import SID, FakeEwig
 
 from gcalsync.sources.ewig import (
@@ -10,12 +10,14 @@ from gcalsync.sources.ewig import (
     EwigError,
     EwigGroup,
     EwigLoginError,
+    _check_export,
     checksum,
     export_url,
     fetch_sources,
     group_plan_url,
     menu_url,
 )
+from gcalsync.sources.outlook_csv import parse_outlook_csv
 
 GROUPS = [
     EwigGroup("WIG23IX2S1", "Grupa kierunkowa"),
@@ -170,3 +172,47 @@ def test_bad_checksum_is_403_with_step_name():
     c.login()
     with pytest.raises(EwigError, match=r"HTTP 403 — krok: plan X \(/ed2/logged.php\)"):
         c._get(group_plan_url(c.sid, 20261, "X").replace("!", "!1"), "plan X")
+
+
+# --- sklejone eksporty (błąd ewig z pliku tymczasowego sesji) ------------------------------
+
+
+def test_each_group_is_fetched_in_its_own_session():
+    fake = FakeEwig(FILES)  # atrapa skleja eksporty w obrębie jednej sesji, jak prawdziwy ewig
+    sources = fetch_sources(client(fake), 20261, GROUPS)
+    assert fake.logins == 2
+    assert [p for m, p, q in fake.log if q.get("lou")] == ["/ed2/index.php"] * 2
+    assert sources[1].data == DEFAULT_GROUP.read_bytes()  # nie sklejony z plikiem pierwszej
+
+
+def test_same_session_export_is_glued_by_fake_like_real_ewig():
+    c = client(FakeEwig(FILES))
+    c.login()
+    first = c.fetch_group_csv(20261, "WIG23IX2S1")
+    second = c.fetch_group_csv(20261, "WIG23IX1S1")
+    assert second.startswith(first) and second != DEFAULT_GROUP.read_bytes()
+
+
+def glued_file() -> bytes:
+    first, second = NEW_GROUP.read_bytes(), DEFAULT_GROUP.read_bytes()
+    return first + second[len(first) :]  # dokładnie to przyszło z ewig 23.09.2026
+
+
+def test_glued_export_is_rejected():
+    data = glued_file()
+    events = parse_outlook_csv(data).events
+    with pytest.raises(EwigError, match="sklejony z plikiem grupy WIG23IX2S1"):
+        _check_export("WIG23IX1S1", data, events, {"WIG23IX2S1": NEW_GROUP.read_bytes()})
+
+
+def test_out_of_order_rows_are_rejected():
+    data = glued_file()
+    with pytest.raises(EwigError, match="nie po kolei"):
+        _check_export("WIG23IX1S1", data, parse_outlook_csv(data).events, {})
+
+
+def test_identical_files_of_two_groups_are_fine():
+    data = make_csv(
+        row("Seminarium dyplomowe (S) [1]", "2026-10-01 09:50", "2026-10-01 11:25", "1")
+    )
+    _check_export("B", data, parse_outlook_csv(data).events, {"A": data})

@@ -267,7 +267,7 @@ temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
    w `ui/controller.py` (testy pytest), widoki w `ui/app.py`. Zapis z GUI: plan liczony
    ponownie tuż przed zapisem, przy różnicy nic nie jest zapisywane (`PlanChangedError`).
 8. Dopracowanie: README z OAuth (✅).
-9. ✅ Automatyzacja: pobieranie z ewig, `gcalsync auto`, GitHub Actions co godzinę.
+9. ✅ Automatyzacja: pobieranie z ewig, `gcalsync auto`, GitHub Actions o 0:00, 6:00, 12:00 i 18:00 (czas polski).
 
 ## Na później (poza v1)
 
@@ -279,7 +279,7 @@ temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
 ## 9. Automatyzacja (zastępuje GUI)
 
 Decyzje: pełna automatyzacja z minimalnym sterowaniem przez aplikację GitHub (wariant A);
-GUI (NiceGUI) usunięte; uruchomienie co pełną godzinę; grupy WIG23IX2S1 (priorytet 1)
+GUI (NiceGUI) usunięte; uruchomienie o 0:00, 6:00, 12:00 i 18:00 czasu polskiego (cron w UTC w obu kandydackich godzinach + krok sprawdzający godzinę w Warszawie); grupy WIG23IX2S1 (priorytet 1)
 i WIG23IX1S1 (priorytet 2); semestr 2026/2027 zimowy (`iid=20261`); BIM zawsze wykluczany;
 logowanie z opcją „Aktualności”; ewig dostępny bez VPN.
 
