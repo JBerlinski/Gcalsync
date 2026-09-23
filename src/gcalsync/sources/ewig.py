@@ -3,7 +3,7 @@
 Klient robi to samo co przeglądarka (ustalone z zapisanych stron i ich JavaScriptu):
 1. GET strony logowania — identyfikator sesji `sid` jest w adresie formularza,
 2. POST formularza logowania (`formname=login`, `default_fun=1` = „Aktualności”),
-3. dla każdej grupy: GET planu grupy (`mid=328`, `iid=<semestr>`, `exv=<kod grupy>`),
+3. dla każdej grupy: GET pozycji menu „Rozkład zajęć grupy”, GET planu grupy (`mid=328`, `iid=<semestr>`, `exv=<kod grupy>`),
    potem GET eksportu „w formacie Outlooka” (`opr=DTXT`, to samo co ikona eksportu),
 4. wylogowanie (`index.php?sid=…&lou=1`).
 
@@ -53,8 +53,14 @@ class EwigGroup:
 # --- adresy (odtworzone z menubody.js / form.js / shedule_teacher_group.js) ----------------
 
 
-def checksum(*values: str, used: int = 0) -> int:
-    """Suma kontrolna `vrf` z funkcji checkurl(): dla każdej cyfry na pozycji j dodaje j+cyfra."""
+# checkurl() najpierw woła prolongTimeOut(), która zmienia zmienną strony `used` (start: 0):
+# gdy bit 0x01 jest pusty -> used |= 0x45, inaczej used |= 0x04. Z 0 zawsze wychodzi 0x45 (69),
+# a kolejne wywołania już tego nie zmieniają. Dopiero potem suma jest powiększana o `used`.
+USED_AFTER_PROLONG = 0x45
+
+
+def checksum(*values: str, used: int = USED_AFTER_PROLONG) -> int:
+    """Suma `vrf` z checkurl(): dla każdej cyfry na pozycji j dodaje j+cyfra, na końcu used."""
     total = 0
     for value in values:
         for j, ch in enumerate(value):
@@ -73,6 +79,14 @@ def _base_query(sid: str, mid: int, iid: int) -> list[tuple[str, str]]:
         ("rdo", "1"),
         ("pos", "0"),
     ]
+
+
+def menu_url(sid: str, semester_iid: int) -> str:
+    """Pozycja menu executeCmm(328, <semestr>, 1, ''): makeURL() + checkurl()."""
+    ss = checksum(str(MID_GROUP_PLAN), str(semester_iid))
+    query = [("sid", sid), ("mid", str(MID_GROUP_PLAN)), ("iid", str(semester_iid))]
+    query += [("vrf", f"!{ss}"), ("rdo", "1"), ("pos", "0")]
+    return BASE_URL + "logged.php?" + urlencode(query, safe="!")
 
 
 def group_plan_url(sid: str, semester_iid: int, group: str) -> str:
@@ -192,6 +206,8 @@ class EwigClient:
     def fetch_group_csv(self, semester_iid: int, group: str) -> bytes:
         if self.sid is None:
             raise EwigError("Najpierw zaloguj się (login()).")
+        # Jak w przeglądarce: najpierw pozycja menu „Rozkład zajęć grupy”, potem wybór grupy.
+        self._get(menu_url(self.sid, semester_iid), "menu planu grup")
         plan = self._text(self._get(group_plan_url(self.sid, semester_iid, group), f"plan {group}"))
         if group not in plan:
             raise EwigError(f"Nie udało się otworzyć planu grupy {group}.")

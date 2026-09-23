@@ -287,7 +287,7 @@ Ustalone z zapisanych stron ewig i ich JavaScriptu [zweryfikowane w plikach stro
 - logowanie: POST `index.php?sid=…` (`formname=login`, `default_fun=1`, `userid`, `password`
   i pola ukryte formularza); `sid` sesji w `var sid = new String('…')`;
 - plan grupy: `logged.php?sid&mid=328&iid=20261&vrf=32820261&rdo=1&pos=0&exv=<grupa>`
-  + suma kontrolna `vrf=!<suma>` z `checkurl()`;
+  + suma kontrolna `vrf=!<suma>` z `checkurl()` (cyfry mid/iid/exv + `used`=0x45 ustawiane przez `prolongTimeOut()`; najpierw wejście w menu `mid=328`);
 - eksport (ikona „Zapisz formularz w pliku tekstowym w formacie OutLook”, `downloadCSV('TXT')`):
   `prepareURL() + 'DTXT'` = `logged.php?…&exv=<grupa>&opr=DTXT` — plik generuje serwer;
 - wylogowanie: `index.php?sid=…&lou=1`.

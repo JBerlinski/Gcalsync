@@ -33,6 +33,10 @@ LOGGED_PAGE = f"""<html><head><script language="JavaScript">
 <b>WIG23IX1S1 - I3X1S1</b></body></html>"""
 
 
+MENU_PAGE = f"""<html><body><script>var sid = new String('{SID}');</script>
+<select name="Data1"><option value="WIG23IX1S1">WIG23IX1S1</option></select></body></html>"""
+
+
 def plan_page(group: str) -> str:
     return (
         f"<html><body><script>var sid = new String('{SID}');</script>"
@@ -61,6 +65,18 @@ class FakeEwig(BaseAdapter):
         response.headers["Content-Type"] = "text/html; charset=iso-8859-2"
         return response
 
+    @staticmethod
+    def _checksum_ok(query: dict) -> bool:
+        """Serwer odrzuca (403) nawigację, której vrf=!<suma> nie zgadza się z checkurl()."""
+        total = sum(
+            j + int(ch)
+            for name in ("mid", "iid", "exv")
+            for value in query.get(name, [])
+            for j, ch in enumerate(value)
+            if ch.isdigit()
+        )
+        return f"!{total + 0x45}" in query.get("vrf", [])
+
     def send(self, request, **kwargs):
         url = urlparse(request.url)
         query = parse_qs(url.query)
@@ -84,6 +100,10 @@ class FakeEwig(BaseAdapter):
         elif url.path == "/ed2/logged.php":
             if not self.logged_in or query.get("sid") != [SID]:
                 page = LOGIN_PAGE
+            elif "opr" not in query and not self._checksum_ok(query):
+                return self._response(request, 403, b"<html>Forbidden</html>")
+            elif "exv" not in query:
+                page = MENU_PAGE
             elif query.get("opr") == ["DTXT"]:
                 group = query["exv"][0]
                 if group not in self.files:

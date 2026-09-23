@@ -14,6 +14,7 @@ from gcalsync.sources.ewig import (
     export_url,
     fetch_sources,
     group_plan_url,
+    menu_url,
 )
 
 GROUPS = [
@@ -35,7 +36,21 @@ def client(fake: FakeEwig, password: str = "sekret") -> EwigClient:
 def test_checksum_matches_checkurl_algorithm():
     # mid "328": 0+3, 1+2, 2+8 = 16; iid "20261": 2+1+4+9+5 = 21;
     # exv "WIG23IX2S1": cyfry na pozycjach 3,4,7,9 -> 5+7+9+10 = 31
-    assert checksum("328", "20261", "WIG23IX2S1") == 68
+    # plus used = 0x45 (69) ustawione przez prolongTimeOut() na początku checkurl()
+    assert checksum("328", "20261", "WIG23IX2S1") == 68 + 69
+    assert checksum("328", "20261", "WIG23IX2S1", used=0) == 68
+
+
+def test_menu_url():
+    params = parse_qsl(urlparse(menu_url("abc", 20261)).query)
+    assert params == [
+        ("sid", "abc"),
+        ("mid", "328"),
+        ("iid", "20261"),
+        ("vrf", "!106"),  # 16 + 21 + 69
+        ("rdo", "1"),
+        ("pos", "0"),
+    ]
 
 
 def test_group_plan_url():
@@ -48,11 +63,11 @@ def test_group_plan_url():
         ("rdo", "1"),
         ("pos", "0"),
         ("exv", "WIG23IX2S1"),
-        ("vrf", "!68"),
+        ("vrf", "!137"),
         ("rdo", "1"),
         ("pos", "0"),
     ]
-    assert "vrf=!68" in group_plan_url("abc", 20261, "WIG23IX2S1")
+    assert "vrf=!137" in group_plan_url("abc", 20261, "WIG23IX2S1")
 
 
 def test_export_url_is_download_csv_txt():
@@ -87,9 +102,11 @@ def test_fetch_sources_logs_in_downloads_and_logs_out():
     assert login_form["formname"] == ["login"]
     assert login_form["default_fun"] == ["1"]  # „Aktualności”
     assert login_form["view_height"] == ["1"]  # pola ukryte formularza są przekazywane
-    # Dla każdej grupy: najpierw plan, potem eksport.
-    oprs = [q.get("opr", [""])[0] for _, p, q in fake.log if p == "/ed2/logged.php"]
-    assert oprs == ["", "DTXT", "", "DTXT"]
+    # Dla każdej grupy: menu, plan grupy, eksport.
+    steps = [
+        q.get("opr", q.get("exv", ["menu"]))[0] for _, p, q in fake.log if p == "/ed2/logged.php"
+    ]
+    assert steps == ["menu", "WIG23IX2S1", "DTXT", "menu", "WIG23IX1S1", "DTXT"]
     assert fake.log[-1][2]["lou"] == ["1"]  # wylogowanie
     assert not fake.logged_in
 
@@ -145,3 +162,11 @@ def test_server_error_is_retried_once_then_fails():
 
 def test_login_returns_session_id():
     assert client(FakeEwig(FILES)).login() == SID
+
+
+def test_bad_checksum_is_403_with_step_name():
+    fake = FakeEwig(FILES)
+    c = client(fake)
+    c.login()
+    with pytest.raises(EwigError, match=r"HTTP 403 — krok: plan X \(/ed2/logged.php\)"):
+        c._get(group_plan_url(c.sid, 20261, "X").replace("!", "!1"), "plan X")
