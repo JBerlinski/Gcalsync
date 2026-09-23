@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gcalsync — polityka prywatności</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; color: #1f2328; background: #fff; }
+  .muted { color: #59636e; }
+</style>
+</head>
+<body>
+<h1>Polityka prywatności gcalsync</h1>
+<p class="muted">Obowiązuje od 23 września 2026 r.</p>
+
+<h2>Jakie dane z Google są używane</h2>
+<p>gcalsync korzysta z Google Calendar API wyłącznie w zakresie
+<code>calendar.app.created</code>. Oznacza to dostęp tylko do kalendarza utworzonego przez
+gcalsync („Plan WAT”) i wydarzeń w nim. Aplikacja nie ma dostępu do innych kalendarzy,
+wydarzeń, kontaktów, poczty ani innych danych konta Google.</p>
+
+<h2>Do czego są używane</h2>
+<p>Wyłącznie do tworzenia, aktualizowania i usuwania wydarzeń planu zajęć w tym kalendarzu,
+tak aby odpowiadał aktualnemu planowi z e-Dziekanatu.</p>
+
+<h2>Przechowywanie i udostępnianie</h2>
+<ul>
+  <li>Token dostępu Google jest przechowywany jako zaszyfrowany sekret repozytorium GitHub
+      (GitHub Actions) i na komputerze autora. Nie jest publikowany.</li>
+  <li>Dziennik zmian z każdego uruchomienia jest przechowywany jako prywatny artefakt
+      GitHub Actions przez 7 dni, a potem usuwany automatycznie.</li>
+  <li>Dane nie są sprzedawane, udostępniane stronom trzecim, używane do reklam
+      ani do trenowania modeli.</li>
+</ul>
+
+<h2>Google API Services User Data Policy</h2>
+<p>Wykorzystanie i przekazywanie informacji otrzymanych z interfejsów API Google przez gcalsync
+jest zgodne z <a href="https://developers.google.com/terms/api-services-user-data-policy">Google
+API Services User Data Policy</a>, w tym z wymaganiami Limited Use.</p>
+
+<h2>Cofnięcie dostępu</h2>
+<p>Dostęp można w każdej chwili cofnąć na stronie
+<a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.
+Usunięcie kalendarza „Plan WAT” usuwa wszystkie dane zapisane przez gcalsync.</p>
+
+<h2>Kontakt</h2>
+<p><a href="https://github.com/JBerlinski">github.com/JBerlinski</a></p>
+
+<hr>
+<div lang="en" class="muted">
+<h2>English summary</h2>
+<p>gcalsync uses the Google Calendar API only with the <code>calendar.app.created</code> scope,
+so it can access nothing but the calendar it created. It uses that access solely to keep the
+author's university timetable up to date. The OAuth token is stored as an encrypted GitHub
+Actions secret. Run logs are kept privately for 7 days. No data is sold, shared with third
+parties, used for advertising or used to train models. gcalsync's use and transfer of information
+received from Google APIs adheres to the
+<a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services
+User Data Policy</a>, including the Limited Use requirements. Access can be revoked at
+<a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</p>
+</div>
+</body>
+</html>
