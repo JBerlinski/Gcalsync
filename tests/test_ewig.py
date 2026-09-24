@@ -154,12 +154,37 @@ def test_changed_login_page_is_reported():
         client(fake).login()
 
 
-def test_server_error_is_retried_once_then_fails():
+def test_server_error_is_retried_then_fails():
     fake = FakeEwig(FILES)
     fake.overrides["/ed2/"] = (503, b"")
     with pytest.raises(EwigError, match="HTTP 503"):
         client(fake).login()
-    assert [p for _, p, _ in fake.log] == ["/ed2/", "/ed2/"]
+    assert [p for _, p, _ in fake.log] == ["/ed2/"] * 3
+
+
+def test_timeout_on_plan_page_is_retried_in_new_session():
+    """Tak jak 24.09.2026: przy planie drugiej grupy ewig przestał odpowiadać."""
+
+    class SlowOnce(FakeEwig):
+        timeouts = 3  # wszystkie próby w pierwszej sesji
+
+        def send(self, request, **kwargs):
+            q = parse_qsl(urlparse(request.url).query)
+            if ("exv", "WIG23IX1S1") in q and ("opr", "DTXT") not in q and self.timeouts:
+                self.timeouts -= 1
+                self.log.append((request.method, "timeout", {}))
+                raise requests.exceptions.ReadTimeout("Read timed out.")
+            return super().send(request, **kwargs)
+
+    fake = SlowOnce(FILES)
+    pauses = []
+    session = requests.Session()
+    session.mount("https://", fake)
+    c = EwigClient("login", "sekret", session=session, sleep=pauses.append)
+    sources = fetch_sources(c, 20261, GROUPS)
+    assert sources[1].data == DEFAULT_GROUP.read_bytes()
+    assert fake.logins == 3  # grupa 1, grupa 2 (nieudana), grupa 2 ponownie
+    assert 60 in pauses
 
 
 def test_login_returns_session_id():
