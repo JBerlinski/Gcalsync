@@ -256,3 +256,14 @@ def test_fetch_sources_attaches_teachers():
         "dr inż. Analizy Laboratorium"
     )
     assert len(sources[1].teachers) > 40
+
+
+def test_parse_teachers_tolerates_raw_html_variants():
+    from gcalsync.sources.ewig import parse_teachers
+
+    raw = (
+        "<TABLE BORDER=0 TITLE='Geowizualizacja - dr hab. In&#380;. Anna Kowalska (Wyk&#322;ad)'>"
+        "<TR><TD><NOBR><B>GEO</B><BR>( <B>w</B> )<BR>A 59</NOBR></TD></TR>"
+        "<TR><TD><NOBR> [3] </NOBR></TD></TR></TABLE>"
+    )
+    assert parse_teachers(raw) == {("geowizualizacja", "w", 3): "dr hab. Inż. Anna Kowalska"}
