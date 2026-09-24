@@ -361,3 +361,21 @@ def test_state_event_is_not_counted_as_foreign(config, api):
     run(config, api, apply=True)
     result = run(config, api, apply=True)
     assert result.plan.unmanaged == []
+
+
+def test_class_removed_from_start_of_plan_is_deleted(config, api):
+    """Tak jak 24.09.2026: seminarium z 1.10 9:50 zniknęło z planu, a było jego pierwszą pozycją."""
+    run(config, api, apply=True)
+    without_first = b"".join(
+        line
+        for line in DEFAULT_GROUP.read_bytes().splitlines(keepends=True)
+        if not line.startswith(b"Seminarium dyplomowe (S) [1],")
+    )
+    result = run(config, api, apply=True, files={**FILES, "WIG23IX1S1": without_first})
+    assert [d.reason for d in result.plan.deletes] == ["nieaktualne"]
+    assert result.plan.kept_outside == []
+    assert not [
+        e
+        for e in classes(api, config.calendar.id)
+        if e["start"]["dateTime"].startswith("2026-10-01T09:50")
+    ]

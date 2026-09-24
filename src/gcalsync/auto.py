@@ -128,10 +128,15 @@ def _plan(
             "nie został utworzony przez gcalsync."
         )
     state, existing = split_state(api.list_events(config.calendar.id))
+    # ewig zawsze daje pełny plan grupy, więc zakres synchronizacji zaczyna się od „teraz”, a nie
+    # od pierwszych zajęć w pliku — inaczej zajęcia usunięte z początku planu by zostały.
+    window = preview.coverage
+    if window is not None:
+        window = (min(window[0], now), window[1])
     plan = plan_sync(
         _desired(config, preview, sources),
         existing,
-        preview.coverage,
+        window,
         now,
         deleted_keys=set(state.deleted) if deleted is None else deleted,
         seen_keys=state.seen,
