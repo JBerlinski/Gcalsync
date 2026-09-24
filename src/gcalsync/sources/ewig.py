@@ -28,7 +28,11 @@ from gcalsync.sources.outlook_csv import CsvFileSource, parse_outlook_csv
 BASE_URL = "https://ewig.wcy.wat.edu.pl/ed2/"
 PAGE_ENCODING = "iso-8859-2"
 MID_GROUP_PLAN = 328
-TIMEOUT_SECONDS = 30
+# (połączenie, odczyt) w sekundach; strona planu grupy ma ~300 kB i bywa generowana wolno.
+TIMEOUT_SECONDS = (15, 90)
+RETRY_DELAYS = (5, 20)  # przerwy między próbami tego samego zapytania (błąd sieci lub 5xx)
+GROUP_RETRY_DELAY = 60  # przerwa przed ponownym pobraniem grupy w nowej sesji
+PAUSE_BETWEEN_GROUPS = 3
 # Tylko ASCII (nagłówki HTTP). Jak przeglądarka, z dopiskiem identyfikującym narzędzie.
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -81,6 +85,10 @@ class EwigError(Exception):
 
 class EwigLoginError(EwigError):
     pass
+
+
+class EwigConnectionError(EwigError):
+    """ewig nie odpowiada (timeout, zerwane połączenie, błąd 5xx) mimo ponowień."""
 
 
 @dataclass(frozen=True)
@@ -189,13 +197,13 @@ class EwigClient:
         return self._request("GET", url, step)
 
     def _request(self, method: str, url: str, step: str, **kwargs) -> requests.Response:
-        """Zapytanie jak z przeglądarki: Referer poprzedniej strony, jedna ponowna próba."""
+        """Zapytanie jak z przeglądarki: Referer poprzedniej strony, ponowienia z przerwami."""
         headers = {"Referer": self._referer} if self._referer else {}
         if method == "POST":
             headers["Origin"] = BASE_URL.rstrip("/").rsplit("/", 1)[0]
         where = f"{step} ({urlparse(url).path})"  # bez parametrów: zawierają identyfikator sesji
         last: str = ""
-        for attempt in range(2):  # jedna ponowna próba przy błędzie sieci lub 5xx
+        for attempt in range(len(RETRY_DELAYS) + 1):  # ponowienia przy błędzie sieci lub 5xx
             try:
                 response = self.session.request(
                     method, url, headers=headers, timeout=TIMEOUT_SECONDS, **kwargs
@@ -211,9 +219,12 @@ class EwigClient:
                     self._referer = response.url or url
                     return response
                 last = f"HTTP {response.status_code}"
-            if attempt == 0:
-                self._sleep(5)
-        raise EwigError(f"Brak połączenia z ewig — krok: {where}: {last}")
+            if attempt < len(RETRY_DELAYS):
+                self._sleep(RETRY_DELAYS[attempt])
+        raise EwigConnectionError(f"Brak połączenia z ewig — krok: {where}: {last}")
+
+    def pause(self, seconds: float) -> None:
+        self._sleep(seconds)
 
     @staticmethod
     def _text(response: requests.Response) -> str:
@@ -300,6 +311,14 @@ def _check_export(group: str, data: bytes, events, previous: dict[str, bytes]) -
             )
 
 
+def _fetch_in_session(client: EwigClient, semester_iid: int, code: str):
+    client.login()
+    try:
+        return client.fetch_group(semester_iid, code)
+    finally:
+        client.logout()
+
+
 def fetch_sources(
     client: EwigClient, semester_iid: int, groups: list[EwigGroup]
 ) -> list[CsvFileSource]:
@@ -312,12 +331,15 @@ def fetch_sources(
     """
     sources = []
     fetched: dict[str, bytes] = {}
-    for group in groups:
-        client.login()
+    for index, group in enumerate(groups):
+        if index:
+            client.pause(PAUSE_BETWEEN_GROUPS)
         try:
-            data, teachers = client.fetch_group(semester_iid, group.code)
-        finally:
-            client.logout()
+            data, teachers = _fetch_in_session(client, semester_iid, group.code)
+        except EwigConnectionError:
+            # Serwer bywa chwilowo przeciążony — jeszcze jedna próba w nowej sesji.
+            client.pause(GROUP_RETRY_DELAY)
+            data, teachers = _fetch_in_session(client, semester_iid, group.code)
         parsed = parse_outlook_csv(data, source_id=group.name)
         errors = [i for i in parsed.issues if i.level == "error"]
         if errors:
