@@ -298,3 +298,29 @@ wymaga wcześniejszego otwarcia planu (klient i tak je otwiera, jak przeglądark
 Bezpieczeństwo: każdy pobrany plik musi przejść parser bez błędów i mieć ≥ 1 zdarzenie;
 zapis z uruchomień cyklicznych tylko przy `auto_apply: true`; bezpiecznik masowego usuwania
 zatrzymuje zapis (kod 4) chyba że ręcznie zezwolono; tajne dane wyłącznie w sekretach GitHuba.
+
+## 10. Ręczne zmiany w Kalendarzu Google i prowadzący
+
+Decyzja: ręczne zmiany w kalendarzu są zachowywane „na stałe” (zastępuje wcześniejsze
+„nadpisuj ręczne edycje”); w opisie prowadzący, bez surowego tematu z planu.
+
+- **Prowadzący:** eksport CSV ich nie ma; są w HTML planu grupy (ten sam, który klient już
+  pobiera przed eksportem) — komórka `<table title="Przedmiot - Prowadzący (Typ)">` ze skrótem
+  typu `(<b>L</b>)` i numerem `[n]`. Dopasowanie po (przedmiot, typ, numer): na zapisanej
+  stronie WIG23IX2S1 30/30 zajęć. Brak prowadzących = ostrzeżenie, opis bez nazwisk.
+- **Wykrywanie ręcznej zmiany:** każde zdarzenie ma w `extendedProperties.private` skróty
+  grup pól (`gcalsync_h`: czas, sala, tytuł, opis) w postaci zapisanej przez gcalsync.
+  Wartość różna i od planu, i od skrótu = zmiana ręczna → pole zostaje, skrót się nie zmienia.
+  Zdarzenia sprzed tej zmiany (bez skrótów) są jednorazowo nadpisywane i dostają skróty.
+- **Przeniesienie:** klucz zdarzenia zawiera czas, więc zdarzenie przeniesione ręcznie
+  zachowuje stary klucz. Gdy w planie pojawia się nowy klucz z tym samym przedmiotem i typem
+  (`gcalsync_ck`) i dokładnie tym czasem, zdarzenie jest do niego przypisywane (bez duplikatu).
+  Zdarzenie z ręcznymi zmianami, którego nie ma w planie, zostaje (nie jest usuwane).
+- **Usunięcie:** Google nie gwarantuje dostępu do usuniętych zdarzeń ani ich znaczników
+  („Deleted events are only guaranteed to have the id field populated”), więc gcalsync
+  zapamiętuje stan sam: zdarzenie techniczne 2000-01-01 w kalendarzu z listą obecnych zajęć
+  (`seen*`) i usuniętych ręcznie (`del*`, z datą zajęć; po terminie znikają). Zajęcia z planu,
+  które były w kalendarzu po ostatnim zapisie, a teraz ich nie ma, zostały usunięte ręcznie.
+  Stan zapisuje tylko uruchomienie z zapisem (dry-run niczego nie zapisuje), pełnym PUT.
+  Limity właściwości (klucz ≤ 44, wartość ≤ 1024, ≤ 300 właściwości, ≤ 32 kB) —
+  zweryfikowane w dokumentacji „Extended properties”. Przywrócenie: `--restore-deleted`.

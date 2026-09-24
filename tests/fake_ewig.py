@@ -7,6 +7,7 @@ w planie), odtworzone z zapisanych stron ewig — bez danych osobowych i prawdzi
 
 from __future__ import annotations
 
+from html import escape
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -37,11 +38,44 @@ MENU_PAGE = f"""<html><body><script>var sid = new String('{SID}');</script>
 <select name="Data1"><option value="WIG23IX1S1">WIG23IX1S1</option></select></body></html>"""
 
 
-def plan_page(group: str) -> str:
+KIND_NAMES = {"w": "Wykład", "L": "Laboratorium", "P": "Projekt", "S": "Seminarium"}
+
+
+def teacher_for(course: str, kind: str) -> str:
+    """Prowadzący w atrapie: deterministyczne, zmyślone nazwisko."""
+    return f"dr inż. {course.split()[0]} {KIND_NAMES.get(kind, kind)}"
+
+
+def plan_cell(course: str, kind: str, seq: int, room: str, teacher: str) -> str:
+    """Komórka planu o takiej budowie jak na prawdziwej stronie ewig (zmyślone dane)."""
+    title = escape(f"{course} - {teacher} ({KIND_NAMES.get(kind, kind)})")
+    return (
+        f'<td class="tdFormList1DSheTeaGrpHTM3" valign="top" title="{title}"><center>'
+        f'<table border="0" align="center" cellspacing="0" cellpadding="0" title="{title}">'
+        f'<tbody><tr border="0"><td class="tdFormList1DSheTeaGrpHTM4" title="{title}"><nobr>'
+        f'<b style="font-size:7.0pt;">ABC</b><br>(<b style="font-size:7.0pt;">{kind}</b>)'
+        f"<br>{room}</nobr></td></tr>"
+        f'<tr border="0"><td class="tdFormList1DSheTeaGrpHTM4" title="{title}"><nobr>'
+        f'<a class="GlubN" title="{title}" href="javascript:cpg(&#39;n&#39;, &#39;1&#39;);">TeT'
+        f"</a></nobr></td></tr>"
+        f'<tr border="0"><td class="tdFormList1DSheTeaGrpHTM4" title="{title}">'
+        f"<nobr>[{seq}]</nobr></td></tr></tbody></table></center></td>"
+    )
+
+
+def plan_page(group: str, data: bytes | None = None) -> str:
+    from gcalsync.core.normalize import parse_subject
+    from gcalsync.sources.outlook_csv import parse_outlook_csv
+
+    cells = []
+    for raw in parse_outlook_csv(data).events if data else []:
+        course, kind, seq = parse_subject(raw.subject)
+        if kind and seq:
+            cells.append(plan_cell(course, kind, seq, raw.location, teacher_for(course, kind)))
     return (
         f"<html><body><script>var sid = new String('{SID}');</script>"
         f"<a href=\"javascript:downloadCSV('TXT');\">eksport</a>"
-        f"<div>{group} (2026-09-23)</div></body></html>"
+        f"<div>{group} (2026-09-23)</div><table><tr>{''.join(cells)}</tr></table></body></html>"
     )
 
 
@@ -120,7 +154,7 @@ class FakeEwig(BaseAdapter):
                 self.session_export = new
                 return self._response(request, 200, glued)
             else:
-                page = plan_page(query["exv"][0])
+                page = plan_page(query["exv"][0], self.files.get(query["exv"][0]))
         else:
             return self._response(request, 404, b"not found")
         data = page.encode("iso-8859-2") if isinstance(page, str) else page

@@ -19,11 +19,17 @@ from gcalsync.auto import (
     run_auto,
 )
 from gcalsync.sources.ewig import EwigClient
+from gcalsync.state import is_state_event
 from gcalsync.storage import ConfigError
 
 REPO_CONFIG = Path(__file__).resolve().parent.parent / "gcalsync.config.json"
 NOW = datetime(2026, 9, 23, 12, 0, tzinfo=UTC)
 FILES = {"WIG23IX2S1": NEW_GROUP.read_bytes(), "WIG23IX1S1": DEFAULT_GROUP.read_bytes()}
+
+
+def classes(api, calendar_id) -> list[dict]:
+    """Zdarzenia zajęć w kalendarzu (bez technicznego zdarzenia ze stanem)."""
+    return [e for e in api.events[calendar_id].values() if not is_state_event(e)]
 
 
 def ewig_client(files=FILES) -> EwigClient:
@@ -110,11 +116,11 @@ def test_mass_delete_stops_unless_allowed(config, api):
     stopped = run(config, api, apply=True, files=only_new)
     assert stopped.exit_code == EXIT_SAFETY_STOP
     assert "bezpiecznik" in stopped.headline
-    assert len(api.events[config.calendar.id]) == 75
+    assert len(classes(api, config.calendar.id)) == 75
 
     allowed = run(config, api, apply=True, files=only_new, allow_mass_delete=True)
     assert allowed.exit_code == EXIT_OK
-    assert len(api.events[config.calendar.id]) < 75
+    assert len(classes(api, config.calendar.id)) < 75
 
 
 def test_missing_calendar_is_error(config, api):
@@ -178,7 +184,7 @@ def test_cli_apply_if_enabled_respects_config(cli_env, api, capsys, tmp_path):
         cli.main(["auto", "--config", str(cli_env), "--apply-if-enabled"], sleep=lambda _s: None)
         == 0
     )
-    assert api.writes == 75
+    assert api.writes == 76  # 75 zajęć + zdarzenie ze stanem (lista usuniętych ręcznie)
 
 
 def test_cli_errors_are_reported_with_exit_3(monkeypatch, cli_env, tmp_path, capsys):
@@ -192,3 +198,166 @@ def test_cli_errors_are_reported_with_exit_3(monkeypatch, cli_env, tmp_path, cap
 
 def test_cli_missing_config_is_exit_2(tmp_path, capsys):
     assert cli.main(["auto", "--config", str(tmp_path / "brak.json")]) == 2
+
+
+# --- opis: prowadzący zamiast tematu ------------------------------------------------------
+
+
+def test_description_has_teacher_and_no_raw_subject(config, api):
+    run(config, api, apply=True)
+    event = next(
+        e for e in classes(api, config.calendar.id) if e["summary"] == "Analizy teledetekcyjne (w)"
+    )
+    assert "Prowadzący: dr inż. Analizy Wykład" in event["description"]
+    assert "Temat w planie" not in event["description"]
+
+
+# --- ręczne zmiany w Kalendarzu Google ----------------------------------------------------
+
+
+def find(api, config, summary, start):
+    """Zdarzenie zajęć po tytule i początku (czas lokalny, np. „2026-10-01T09:50”)."""
+    return next(
+        e
+        for e in classes(api, config.calendar.id)
+        if e["summary"] == summary and e["start"]["dateTime"].startswith(start)
+    )
+
+
+def move(event, start, end):
+    """Przeniesienie zdarzenia tak, jak zrobiłby to użytkownik w Kalendarzu Google."""
+    event["start"] = {"dateTime": f"{start}:00+02:00", "timeZone": "Europe/Warsaw"}
+    event["end"] = {"dateTime": f"{end}:00+02:00", "timeZone": "Europe/Warsaw"}
+
+
+SEMINAR = ("Seminarium dyplomowe (S)", "2026-10-01T09:50")
+
+
+def test_manually_moved_class_stays_where_it_was_moved(config, api):
+    run(config, api, apply=True)
+    move(find(api, config, *SEMINAR), "2026-10-02T12:00", "2026-10-02T13:35")
+
+    again = run(config, api, apply=True)
+    assert again.plan.operation_count == 0
+    moved = find(api, config, "Seminarium dyplomowe (S)", "2026-10-02T12:00")
+    assert moved["end"]["dateTime"].startswith("2026-10-02T13:35")
+    [keep] = again.plan.manual_keeps
+    assert keep.manual == ["czas"]
+    assert "✋" in markdown_summary(again)
+
+
+def test_manual_note_in_description_is_kept_but_room_still_follows_plan(config, api, tmp_path):
+    run(config, api, apply=True)
+    event = find(api, config, *SEMINAR)
+    event["description"] = "Przynieść laptopa"
+    # Dziekanat zmienia salę tych zajęć.
+    new_default = DEFAULT_GROUP.read_bytes().replace(
+        b"Seminarium dyplomowe (S) [1],18 58", b"Seminarium dyplomowe (S) [1],99 99"
+    )
+    files = {**FILES, "WIG23IX1S1": new_default}
+    result = run(config, api, apply=True, files=files)
+    assert result.exit_code == EXIT_OK
+    stored = find(api, config, *SEMINAR)
+    assert stored["description"] == "Przynieść laptopa"
+    assert stored["location"] == "99 99"
+
+
+def test_value_set_back_to_plan_ends_protection(config, api):
+    run(config, api, apply=True)
+    original = find(api, config, *SEMINAR)
+    start, end = original["start"], original["end"]
+    move(original, "2026-10-02T12:00", "2026-10-02T13:35")
+    run(config, api, apply=True)
+    moved = find(api, config, "Seminarium dyplomowe (S)", "2026-10-02T12:00")
+    moved["start"], moved["end"] = start, end  # użytkownik cofa przeniesienie
+    result = run(config, api, apply=True)
+    assert result.plan.manual_keeps == []
+
+
+def test_dean_moving_class_to_manual_slot_adopts_event(config, api):
+    run(config, api, apply=True)
+    move(find(api, config, *SEMINAR), "2026-10-01T08:00", "2026-10-01T09:35")
+    run(config, api, apply=True)
+    # Dziekanat wpisuje ten sam nowy termin (plik nadal ułożony chronologicznie).
+    new_default = DEFAULT_GROUP.read_bytes().replace(
+        b"Seminarium dyplomowe (S) [1],18 58,2026-10-01,09:50,2026-10-01,11:25",
+        b"Seminarium dyplomowe (S) [1],18 58,2026-10-01,08:00,2026-10-01,09:35",
+    )
+    files = {**FILES, "WIG23IX1S1": new_default}
+    result = run(config, api, apply=True, files=files)
+    assert result.plan.adds == [] and result.plan.deletes == []
+    [update] = result.plan.updates
+    assert update.adopted
+    seminars = [
+        e
+        for e in classes(api, config.calendar.id)
+        if e["start"]["dateTime"].startswith("2026-10-01T08:00")
+    ]
+    assert len(seminars) == 1
+    # Od teraz to zwykłe zajęcia z planu: brak ochrony, brak zmian.
+    again = run(config, api, apply=True, files=files)
+    assert again.plan.operation_count == 0 and again.plan.manual_keeps == []
+
+
+def test_manually_moved_class_removed_from_plan_is_kept(config, api):
+    run(config, api, apply=True)
+    move(find(api, config, *SEMINAR), "2026-10-02T12:00", "2026-10-02T13:35")
+    run(config, api, apply=True)
+    without = b"".join(
+        line
+        for line in DEFAULT_GROUP.read_bytes().splitlines(keepends=True)
+        if not line.startswith(b"Seminarium dyplomowe (S) [1],")
+    )
+    result = run(config, api, apply=True, files={**FILES, "WIG23IX1S1": without})
+    assert result.plan.deletes == []
+    [keep] = result.plan.manual_keeps
+    assert keep.reason == "zmienione ręcznie, brak w planie"
+    assert find(api, config, "Seminarium dyplomowe (S)", "2026-10-02T12:00")
+
+
+def test_manually_deleted_class_is_not_added_again(config, api):
+    run(config, api, apply=True)
+    event = find(api, config, *SEMINAR)
+    del api.events[config.calendar.id][event["id"]]
+
+    dry = run(config, api, apply=False)  # dry-run wykrywa, ale niczego nie zapisuje
+    assert dry.plan.adds == [] and len(dry.plan.newly_deleted) == 1
+    assert dry.state_saved is False
+
+    first = run(config, api, apply=True)
+    assert first.plan.adds == [] and first.state_saved
+    assert "Usunięte ręcznie" in markdown_summary(first)
+    for _ in range(2):  # pamiętane także w kolejnych uruchomieniach
+        later = run(config, api, apply=True)
+        assert later.plan.operation_count == 0
+        assert len(later.plan.deleted_by_user) == 1 and later.plan.newly_deleted == []
+
+
+def test_restore_deleted_brings_classes_back(config, api):
+    run(config, api, apply=True)
+    event = find(api, config, *SEMINAR)
+    del api.events[config.calendar.id][event["id"]]
+    run(config, api, apply=True)
+
+    restored = run(config, api, apply=True, restore_deleted=True)
+    assert len(restored.plan.adds) == 1
+    assert find(api, config, *SEMINAR)
+    assert run(config, api, apply=True).plan.deleted_by_user == []
+
+
+def test_events_from_before_tracking_are_overwritten_and_migrated(config, api):
+    run(config, api, apply=True)
+    for e in classes(api, config.calendar.id):
+        del e["extendedProperties"]["private"]["gcalsync_h"]
+    event = find(api, config, *SEMINAR)
+    event["location"] = "stara sala"
+    result = run(config, api, apply=True)
+    assert len(result.plan.updates) == 75  # znacznik dopisany wszystkim
+    assert find(api, config, *SEMINAR)["location"] == "18 58"
+    assert run(config, api, apply=True).plan.operation_count == 0
+
+
+def test_state_event_is_not_counted_as_foreign(config, api):
+    run(config, api, apply=True)
+    result = run(config, api, apply=True)
+    assert result.plan.unmanaged == []

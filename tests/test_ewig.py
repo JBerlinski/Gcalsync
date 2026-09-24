@@ -216,3 +216,43 @@ def test_identical_files_of_two_groups_are_fine():
         row("Seminarium dyplomowe (S) [1]", "2026-10-01 09:50", "2026-10-01 11:25", "1")
     )
     _check_export("B", data, parse_outlook_csv(data).events, {"A": data})
+
+
+# --- prowadzący ze strony planu -----------------------------------------------------------
+
+
+def test_parse_teachers_from_plan_cells():
+    from fake_ewig import plan_cell
+
+    from gcalsync.sources.ewig import parse_teachers
+
+    page = "".join(
+        [
+            plan_cell("Analizy teledetekcyjne", "L", 5, "17 58", "mgr inż. Anna Nowak"),
+            plan_cell("Analizy teledetekcyjne", "w", 1, "A 59", "dr inż. Jan Kowalski"),
+            # Te same zajęcia w dwóch podgrupach, z różnymi prowadzącymi.
+            plan_cell("Geowizualizacja", "L", 2, "13 58", "mgr Ewa Zielińska"),
+            plan_cell("Geowizualizacja", "L", 2, "14 58", "mgr Piotr Wiśniewski"),
+            # Bez prowadzącego — pomijane.
+            plan_cell("Seminarium dyplomowe", "S", 1, "18 58", ""),
+        ]
+    )
+    assert parse_teachers(page) == {
+        ("analizy teledetekcyjne", "l", 5): "mgr inż. Anna Nowak",
+        ("analizy teledetekcyjne", "w", 1): "dr inż. Jan Kowalski",
+        ("geowizualizacja", "l", 2): "mgr Ewa Zielińska, mgr Piotr Wiśniewski",
+    }
+
+
+def test_parse_teachers_on_page_without_cells_is_empty():
+    from gcalsync.sources.ewig import parse_teachers
+
+    assert parse_teachers("<html><table title='x'></table></html>") == {}
+
+
+def test_fetch_sources_attaches_teachers():
+    sources = fetch_sources(client(FakeEwig(FILES)), 20261, GROUPS)
+    assert sources[0].teachers[("analizy teledetekcyjne", "l", 1)] == (
+        "dr inż. Analizy Laboratorium"
+    )
+    assert len(sources[1].teachers) > 40

@@ -38,6 +38,9 @@ class CalendarApi(Protocol):
         self, calendar_id: str, event_id: str, body: dict[str, Any]
     ) -> dict[str, Any]: ...
 
+    def update_event(
+        self, calendar_id: str, event_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]: ...
     def delete_event(self, calendar_id: str, event_id: str) -> None: ...
 
 
@@ -151,6 +154,11 @@ class GoogleCalendarApi:
     def patch_event(self, calendar_id: str, event_id: str, body: dict[str, Any]) -> dict[str, Any]:
         request = self._service.events().patch(calendarId=calendar_id, eventId=event_id, body=body)
         return self._execute(request, "zmiana zdarzenia")
+
+    def update_event(self, calendar_id: str, event_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Pełna podmiana zdarzenia (PUT) — w odróżnieniu od patch usuwa pominięte pola."""
+        request = self._service.events().update(calendarId=calendar_id, eventId=event_id, body=body)
+        return self._execute(request, "zapis zdarzenia")
 
     def delete_event(self, calendar_id: str, event_id: str) -> None:
         request = self._service.events().delete(calendarId=calendar_id, eventId=event_id)

@@ -132,11 +132,11 @@ def test_update_and_delete_are_applied(capsys, paths, api, configured):
 
     assert cli(paths, api, "sync", "--apply", answers=["tak"]) == 0
     out = capsys.readouterr().out
-    assert "dodanie 0, zmiana 1, usunięcie 16" in out
+    assert "dodanie 0, zmiana 0, usunięcie 16" in out
     assert "Weryfikacja: kalendarz jest zgodny z planem." in out
     stored = {e["id"]: e for e in events(api, configured)}
-    assert stored[first["id"]]["location"] == "18 58"
-    # Zmiana nie nadpisuje Twoich przypomnień.
+    # Sala zmieniona ręcznie w Kalendarzu Google zostaje, przypomnienia też.
+    assert stored[first["id"]]["location"] == "999 99"
     assert stored[first["id"]]["reminders"]["overrides"][0]["minutes"] == 5
     assert "own" in stored
     analizy = [e for e in stored.values() if e["summary"].startswith("Analizy")]
@@ -253,7 +253,9 @@ def test_journal_records_every_operation(paths, api, configured):
 def test_operations_order_adds_updates_deletes(paths, api, configured):
     cli(paths, api, "sync", "--apply", answers=["tak"])
     stored = events(api, configured)
+    # Zdarzenie sprzed śledzenia ręcznych zmian (bez skrótów) — zmiana jest nadpisywana.
     stored[0]["summary"] = "zmienione"
+    del stored[0]["extendedProperties"]["private"]["gcalsync_h"]
     cli(paths, api, "sources", "remove", "Grupa kierunkowa")
     cli(paths, api, "rules", "disable", "1")
     plan = build_sync_preview(paths, load_config(paths), api).plan

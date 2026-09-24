@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, date, datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -16,6 +17,13 @@ PROP_MANAGED = "gcalsync_managed"
 PROP_KEY = "gcalsync_key"
 PROP_VERSION = "gcalsync_v"
 MARKER_VERSION = "1"
+# Skróty pól w postaci, w jakiej gcalsync je ostatnio zapisał — pozwalają odróżnić zmianę
+# wprowadzoną ręcznie w Kalendarzu Google od zmiany w planie (patrz core.diff).
+PROP_HASHES = "gcalsync_h"
+# Skrót przedmiotu i typu zajęć — do rozpoznania ręcznie przeniesionych zajęć, gdy dziekanat
+# przeniesie je w to samo miejsce.
+PROP_COURSE = "gcalsync_ck"
+MARKER_PROPS = (PROP_MANAGED, PROP_KEY, PROP_VERSION, PROP_HASHES, PROP_COURSE)
 
 # Pola porównywane przy wykrywaniu zmian (przypomnienia celowo pomijamy — to Twoje ustawienie).
 COMPARED_FIELDS = ("summary", "location", "description", "start", "end")
@@ -25,6 +33,15 @@ FIELD_LABELS = {
     "description": "opis",
     "start": "początek",
     "end": "koniec",
+    "marker": "znacznik gcalsync",
+}
+
+# Grupy pól, które można zmienić ręcznie; zmiana któregoś pola grupy chroni całą grupę.
+MANUAL_GROUPS = {
+    "czas": ("start", "end"),
+    "sala": ("location",),
+    "tytuł": ("summary",),
+    "opis": ("description",),
 }
 
 
@@ -42,30 +59,67 @@ def render_title(event: Event, template: str) -> str:
     return " ".join(template.format_map(fields).split())
 
 
-def render_description(event: Event, source_name: str) -> str:
+def render_description(event: Event, source_name: str, teacher: str | None = None) -> str:
     lines = [f"Przedmiot: {event.course}"]
     if event.kind:
         lines.append(f"Typ zajęć: {event.kind}")
+    if teacher:
+        lines.append(f"Prowadzący: {teacher}")
     if event.seq is not None:
         lines.append(f"Zajęcia nr: {event.seq}")
     lines += [
-        f"Temat w planie: {event.subject_raw}",
         f"Źródło: {source_name}",
         "",
-        "Zarządzane przez gcalsync — ręczne zmiany zostaną nadpisane przy synchronizacji.",
+        "Plan z e-Dziekanatu (gcalsync). Zmiany wprowadzone tu ręcznie zostają zachowane,",
+        "a usuniętych zajęć gcalsync nie dodaje ponownie.",
     ]
     return "\n".join(lines)
+
+
+def course_signature(course: str, kind: str | None) -> str:
+    text = f"{course.casefold()}|{(kind or '').casefold()}"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _digest(values: tuple[str, ...]) -> str:
+    return hashlib.sha256("\x1f".join(values).encode("utf-8")).hexdigest()[:12]
+
+
+def group_values(resource: dict[str, Any]) -> dict[str, tuple[str, ...]]:
+    """Wartości grup pól (znormalizowane jak w `comparable`)."""
+    values = comparable(resource)
+    return {g: tuple(values[f] for f in fields) for g, fields in MANUAL_GROUPS.items()}
+
+
+def group_hashes(resource: dict[str, Any]) -> dict[str, str]:
+    return {g: _digest(v) for g, v in group_values(resource).items()}
+
+
+def encode_hashes(hashes: dict[str, str]) -> str:
+    return ";".join(f"{g}={h}" for g, h in hashes.items())
+
+
+def decode_hashes(value: str | None) -> dict[str, str] | None:
+    """None = zdarzenie sprzed śledzenia ręcznych zmian (albo uszkodzony znacznik)."""
+    if not value:
+        return None
+    pairs = [part.split("=", 1) for part in value.split(";")]
+    if any(len(p) != 2 for p in pairs):
+        return None
+    return dict(pairs)
 
 
 def _local_iso(moment: datetime) -> str:
     return moment.astimezone(WARSAW).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
-def event_body(event: Event, title_template: str, source_name: str) -> dict[str, Any]:
+def event_body(
+    event: Event, title_template: str, source_name: str, teacher: str | None = None
+) -> dict[str, Any]:
     """Zasób zdarzenia do wysłania: czas lokalny bez offsetu + timeZone (Google wylicza offset)."""
     body: dict[str, Any] = {
         "summary": render_title(event, title_template),
-        "description": render_description(event, source_name),
+        "description": render_description(event, source_name, teacher),
         "start": {"dateTime": _local_iso(event.start), "timeZone": TIME_ZONE},
         "end": {"dateTime": _local_iso(event.end), "timeZone": TIME_ZONE},
         "reminders": {"useDefault": True},
@@ -74,11 +128,13 @@ def event_body(event: Event, title_template: str, source_name: str) -> dict[str,
                 PROP_MANAGED: "1",
                 PROP_KEY: event.key,
                 PROP_VERSION: MARKER_VERSION,
+                PROP_COURSE: course_signature(event.course, event.kind),
             }
         },
     }
     if event.location:
         body["location"] = event.location
+    body["extendedProperties"]["private"][PROP_HASHES] = encode_hashes(group_hashes(body))
     return body
 
 

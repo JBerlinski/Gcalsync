@@ -249,6 +249,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="pozwól na zapis mimo zadziałania bezpiecznika masowego usuwania",
     )
     auto.add_argument(
+        "--restore-deleted",
+        action="store_true",
+        help="przywróć zajęcia usunięte ręcznie z kalendarza (działa razem z zapisem)",
+    )
+    auto.add_argument(
         "--save-dir", type=Path, metavar="KATALOG", help="zapisz pobrane pliki i dziennik"
     )
     auto.add_argument(
@@ -651,6 +656,7 @@ def cmd_auto(args: argparse.Namespace, ctx: Context) -> int:
             ),
             apply=apply,
             allow_mass_delete=args.allow_mass_delete,
+            restore_deleted=args.restore_deleted,
             save_dir=args.save_dir,
             sleep=ctx.sleep,
         )

@@ -255,9 +255,10 @@ def test_dry_run_shows_updates_deletes_and_ignores_foreign_events(capsys, paths,
     assert run_google(paths, fake_api, "sync") == 0
     out = capsys.readouterr().out
     assert "=== Do dodania (0) ===" in out
-    assert "=== Do zmiany (1) ===" in out
-    assert "sala: „999 99” -> „18 58”" in out
-    assert "=== Bez zmian: 74 ===" in out
+    assert "=== Do zmiany (0) ===" in out  # ręczna zmiana sali zostaje
+    assert "Zmienione ręcznie w Kalendarzu Google (zmiany zachowane): 1" in out
+    assert "999 99  [zmienione ręcznie: sala]" in out
+    assert "=== Bez zmian: 75 ===" in out
     assert "inne 1 (nigdy nie są ruszane)" in out
 
     # Bez pliku grupy kierunkowej okno pokrycia kończy się 18.12: usuwane są tylko zajęcia
