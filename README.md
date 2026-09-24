@@ -18,8 +18,9 @@ Wszystkie polecenia uruchamiasz w katalogu repozytorium: `uv run gcalsync …`.
 
 Zadanie `.github/workflows/sync.yml` o 0:00, 6:00, 12:00 i 18:00 (czas polski) loguje się
 do ewig, pobiera plan grup (to samo co ikona eksportu „w formacie OutLook”), przepuszcza go
-przez reguły i synchronizuje kalendarz „Plan WAT”. Konfiguracja bez sekretów: [`gcalsync.config.json`](gcalsync.config.json)
-(grupy i ich priorytet, semestr, reguły, szablon tytułu, ID kalendarza, `auto_apply`).
+przez reguły i synchronizuje kalendarz „Plan WAT”. Nazwiska prowadzących są odczytywane
+ze strony planu grupy (eksport CSV ich nie zawiera). Konfiguracja bez sekretów:
+[`gcalsync.config.json`](gcalsync.config.json) (grupy i ich priorytet, semestr, reguły, szablon tytułu, ID kalendarza, `auto_apply`).
 
 Zapis następuje tylko, gdy: pliki z ewig pobrały się i nie mają błędów, kalendarz jest dostępny
 i nie zadziałał bezpiecznik masowego usuwania. Inaczej zadanie kończy się błędem (e-mail od
@@ -27,9 +28,29 @@ GitHuba), a kalendarz zostaje nietknięty. Podsumowanie zmian jest w raporcie ur
 a pobrane pliki i dziennik w artefakcie (7 dni).
 
 **Sterowanie z telefonu:** aplikacja GitHub → repozytorium → Actions → „Synchronizacja planu”
-→ „Run workflow” (opcje: zapis / tylko dry-run, zgoda na masowe usuwanie), historia uruchomień
+→ „Run workflow” (opcje: zapis / tylko dry-run, zgoda na masowe usuwanie, przywrócenie
+zajęć usuniętych ręcznie), historia uruchomień
 i podsumowania. `auto_apply` w `gcalsync.config.json` włącza zapis z uruchomień cyklicznych
 (do edycji także z telefonu).
+
+### Ręczne zmiany w kalendarzu
+
+Zajęcia w „Plan WAT” można zmieniać bezpośrednio w Kalendarzu Google (także z telefonu),
+a synchronizacja tych zmian nie cofa:
+
+- **Przeniesienie, zmiana sali, tytułu lub opisu** — zmienione pole zostaje takie, jak je
+  ustawiono. Pozostałe pola nadal aktualizują się z planu (np. zmiana sali przez dziekanat
+  przy zajęciach z własną notatką w opisie). Gdy dziekanat wpisze do planu dokładnie ten
+  termin, na który zajęcia przeniesiono ręcznie, zdarzenie znów jest zwykłym zdarzeniem z planu.
+  Przywrócenie wartości z planu też kończy ochronę.
+- **Usunięcie** — usunięte zajęcia nie są dodawane ponownie. Przywrócenie wszystkich:
+  „Run workflow” z zaznaczonymi opcjami zapisu i „Przywróć zajęcia usunięte ręcznie”.
+- **Zajęcia przeniesione ręcznie, których nie ma już w planie**, zostają w kalendarzu.
+- **Własne wydarzenia** dodane do „Plan WAT” nigdy nie są ruszane.
+
+Listę usuniętych zajęć gcalsync trzyma w technicznym zdarzeniu z 1 stycznia 2000 r.
+w kalendarzu „Plan WAT” („gcalsync — dane techniczne”) — nie usuwaj go. Wszystkie zachowane
+ręczne zmiany i usunięcia są wypisane w podsumowaniu uruchomienia.
 
 ### Jednorazowa konfiguracja
 

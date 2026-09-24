@@ -12,6 +12,7 @@ Hasło nie jest nigdzie logowane ani umieszczane w komunikatach błędów.
 
 from __future__ import annotations
 
+import html
 import re
 import time
 from collections.abc import Callable
@@ -21,6 +22,7 @@ from urllib.parse import urlencode, urlparse
 
 import requests
 
+from gcalsync.core.normalize import normalize_text
 from gcalsync.sources.outlook_csv import CsvFileSource, parse_outlook_csv
 
 BASE_URL = "https://ewig.wcy.wat.edu.pl/ed2/"
@@ -34,6 +36,39 @@ USER_AGENT = (
 )
 
 SID_IN_PAGE = re.compile(r"var sid = new String\('([0-9a-fA-F]+)'\)")
+
+# Komórka planu grupy: tabela z tytułem „Przedmiot - Prowadzący (Typ zajęć)”, w środku skrót
+# typu w nawiasie, np. „(<b …>L</b>)”, i numer zajęć „[5]” — ten sam co w eksporcie CSV.
+PLAN_CELL = re.compile(r'<table[^>]*\btitle="([^"]*)"[^>]*>(.*?)</table>', re.S)
+CELL_KIND = re.compile(r"\(<b[^>]*>([^<]+)</b>\)")
+CELL_SEQ = re.compile(r"<nobr>\[(\d+)\]</nobr>")
+
+TeacherKey = tuple[str, str, int]  # (przedmiot, typ zajęć, numer) — po casefold
+
+
+def teacher_key(course: str, kind: str | None, seq: int | None) -> TeacherKey | None:
+    if kind is None or seq is None:
+        return None
+    return normalize_text(course).casefold(), normalize_text(kind).casefold(), seq
+
+
+def parse_teachers(page: str) -> dict[TeacherKey, str]:
+    """Prowadzący z HTML planu grupy (eksport CSV ich nie zawiera).
+
+    Kilku prowadzących tych samych zajęć (np. podgrupy) jest łączonych przecinkiem.
+    """
+    found: dict[TeacherKey, list[str]] = {}
+    for title, body in PLAN_CELL.findall(page):
+        kind, seq = CELL_KIND.search(body), CELL_SEQ.search(body)
+        head, sep, _kind_name = html.unescape(title).rpartition(" (")
+        course, dash, teacher = head.rpartition(" - ")
+        if not (kind and seq and sep and dash):
+            continue
+        key = teacher_key(course, kind.group(1), int(seq.group(1)))
+        teacher = normalize_text(teacher)
+        if key and teacher and teacher not in found.setdefault(key, []):
+            found[key].append(teacher)
+    return {key: ", ".join(names) for key, names in found.items()}
 
 
 class EwigError(Exception):
@@ -207,6 +242,10 @@ class EwigClient:
         return self.sid
 
     def fetch_group_csv(self, semester_iid: int, group: str) -> bytes:
+        return self.fetch_group(semester_iid, group)[0]
+
+    def fetch_group(self, semester_iid: int, group: str) -> tuple[bytes, dict[TeacherKey, str]]:
+        """Plik CSV grupy i prowadzący odczytani ze strony planu (ta sama sesja)."""
         if self.sid is None:
             raise EwigError("Najpierw zaloguj się (login()).")
         # Jak w przeglądarce: najpierw pozycja menu „Rozkład zajęć grupy”, potem wybór grupy.
@@ -218,7 +257,7 @@ class EwigClient:
         head = data[:512].lstrip().lower()
         if head.startswith(b"<") or b"<html" in head:
             raise EwigError(f"Eksport planu grupy {group} zwrócił stronę HTML zamiast pliku CSV.")
-        return data
+        return data, parse_teachers(plan)
 
     def logout(self) -> None:
         if self.sid is None:
@@ -272,7 +311,7 @@ def fetch_sources(
     for group in groups:
         client.login()
         try:
-            data = client.fetch_group_csv(semester_iid, group.code)
+            data, teachers = client.fetch_group(semester_iid, group.code)
         finally:
             client.logout()
         parsed = parse_outlook_csv(data, source_id=group.name)
@@ -286,6 +325,12 @@ def fetch_sources(
         _check_export(group.code, data, parsed.events, fetched)
         fetched[group.code] = data
         sources.append(
-            CsvFileSource(id=group.name, name=group.name, data=data, filename=f"{group.code}.csv")
+            CsvFileSource(
+                id=group.name,
+                name=group.name,
+                data=data,
+                filename=f"{group.code}.csv",
+                teachers=teachers,
+            )
         )
     return sources

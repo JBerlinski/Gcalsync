@@ -14,6 +14,7 @@ from gcalsync.gcal.auth import load_credentials
 from gcalsync.gcal.client import CalendarApi, GoogleCalendarApi
 from gcalsync.gcal.executor import ExecutionResult, Journal, Operation, execute_plan, verify
 from gcalsync.gcal.mapping import TIME_ZONE, event_body
+from gcalsync.state import SyncState, short_key, split_state
 from gcalsync.storage import (
     DEFAULT_CALENDAR_NAME,
     CalendarConfig,
@@ -82,13 +83,23 @@ def build_sync_preview(
         for e in preview.events
     ]
     existing = []
+    state = SyncState()
     calendar = None
     if config.calendar is not None:
         if api is None:
             raise ConfigError("Brak połączenia z Google (wymagane logowanie).")
         calendar = require_calendar(config, api)
-        existing = api.list_events(calendar.id)
-    plan = plan_sync(desired, existing, preview.coverage, now or datetime.now(UTC))
+        # Stan (zajęcia usunięte ręcznie) zapisuje tylko tryb automatyczny; tu jest respektowany.
+        state, existing = split_state(api.list_events(calendar.id))
+    plan = plan_sync(
+        desired,
+        existing,
+        preview.coverage,
+        now or datetime.now(UTC),
+        deleted_keys=set(state.deleted),
+        seen_keys=state.seen,
+        key_id=short_key,
+    )
     return SyncPreview(preview=preview, plan=plan, calendar=calendar)
 
 

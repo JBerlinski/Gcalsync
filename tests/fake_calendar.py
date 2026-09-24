@@ -91,6 +91,23 @@ class FakeCalendarApi:
             raise self._pending
         return copy.deepcopy(event)
 
+    def update_event(self, calendar_id: str, event_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(f"update {event_id}")
+        lost = self._maybe_fail("update")
+        if event_id not in self.events[calendar_id]:
+            raise GoogleApiError("not found", 404)
+        stored = copy.deepcopy(body)
+        stored.update(
+            id=event_id,
+            status="confirmed",
+            start=to_google_time(body["start"]),
+            end=to_google_time(body["end"]),
+        )
+        self.events[calendar_id][event_id] = stored
+        if lost:
+            raise self._pending
+        return copy.deepcopy(stored)
+
     def delete_event(self, calendar_id: str, event_id: str) -> None:
         self.calls.append(f"delete {event_id}")
         lost = self._maybe_fail("delete")

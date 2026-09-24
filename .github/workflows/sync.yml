@@ -18,6 +18,10 @@ on:
         description: "Pozwól na zapis mimo bezpiecznika masowego usuwania"
         type: boolean
         default: false
+      restore_deleted:
+        description: "Przywróć zajęcia usunięte ręcznie z kalendarza (razem z zapisem)"
+        type: boolean
+        default: false
 
 concurrency:
   group: gcalsync
@@ -67,7 +71,8 @@ jobs:
           GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
           MODE: ${{ github.event_name == 'schedule' && '--apply-if-enabled' || (inputs.apply && '--apply' || '') }}
           MASS: ${{ inputs.allow_mass_delete && '--allow-mass-delete' || '' }}
-        run: uv run --frozen --no-dev gcalsync auto $MODE $MASS --save-dir run-output --summary "$GITHUB_STEP_SUMMARY"
+          RESTORE: ${{ inputs.restore_deleted && '--restore-deleted' || '' }}
+        run: uv run --frozen --no-dev gcalsync auto $MODE $MASS $RESTORE --save-dir run-output --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Pliki z ewig i dziennik (7 dni)
         if: always() && steps.gate.outputs.run == 'true'

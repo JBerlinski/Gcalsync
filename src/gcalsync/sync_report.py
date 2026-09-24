@@ -76,7 +76,14 @@ def render_sync_text(sync: SyncPreview, apply: bool = False) -> str:
     add(f"\n=== Do zmiany ({len(plan.updates)}) ===")
     for u in plan.updates:
         add(f"  ~ {_line(u.body)}")
+        if u.adopted:
+            add("      zajęcia przeniesione ręcznie — dziekanat wpisał ten sam termin")
+        if u.manual:
+            add(f"      zachowane ręczne zmiany: {', '.join(u.manual)}")
         for c in u.changes:
+            if c.field == "marker":
+                add(f"      {FIELD_LABELS[c.field]}: {c.old}")
+                continue
             add(
                 f"      {FIELD_LABELS[c.field]}: „{_value(c.field, c.old)}” -> "
                 f"„{_value(c.field, c.new)}”"
@@ -94,6 +101,15 @@ def render_sync_text(sync: SyncPreview, apply: bool = False) -> str:
         "  Zarządzane zdarzenia zakończone lub poza oknem (nie są ruszane): "
         f"{len(plan.kept_outside)}"
     )
+    add(
+        "  Zmienione ręcznie w Kalendarzu Google (zmiany zachowane): "
+        f"{len(plan.manual_keeps) + sum(1 for u in plan.updates if u.manual)}"
+    )
+    for k in plan.manual_keeps:
+        add(f"    ✋ {_line(k.existing)}  [{k.reason}: {', '.join(k.manual)}]")
+    add(f"  Usunięte ręcznie (nie są dodawane ponownie): {len(plan.deleted_by_user)}")
+    for e in plan.newly_deleted:
+        add(f"    ✖ {e.start.astimezone(WARSAW):%Y-%m-%d %H:%M} {e.subject_raw}  [nowe]")
     if plan.broken:
         add(f"  Zdarzenia z uszkodzonym znacznikiem gcalsync (nie są ruszane): {len(plan.broken)}")
         for g in plan.broken:

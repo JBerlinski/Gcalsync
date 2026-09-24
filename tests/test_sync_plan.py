@@ -142,12 +142,14 @@ def test_location_change_is_update_not_delete_add():
     assert plan.adds == plan.deletes == []
 
 
-def test_manual_edit_in_google_is_reverted():
+def test_manual_edit_in_google_is_kept():
     event = one_event()
     body = event_body(event, TEMPLATE, "A")
     edited = google_copy(body, id="e1", summary="Moja notatka")
     plan = plan_sync([(event, body)], [edited], (event.start, event.end), BEFORE_SEMESTER)
-    assert [c.field for c in plan.updates[0].changes] == ["summary"]
+    assert plan.updates == [] and plan.unchanged == 1
+    [keep] = plan.manual_keeps
+    assert keep.manual == ["tytuł"] and keep.reason == "zmienione ręcznie"
 
 
 def test_time_change_is_delete_and_add():

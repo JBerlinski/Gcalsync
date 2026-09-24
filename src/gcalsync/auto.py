@@ -22,12 +22,15 @@ from typing import Any
 from gcalsync.app import SyncPreview
 from gcalsync.core.diff import SyncPlan, plan_sync
 from gcalsync.core.merge import ConflictPolicy
+from gcalsync.core.normalize import WARSAW
 from gcalsync.core.pipeline import PreviewResult, build_preview
 from gcalsync.core.rules import ExclusionRule, RuleError
 from gcalsync.gcal.client import CalendarApi
 from gcalsync.gcal.executor import ExecutionResult, Journal, execute_plan, verify
 from gcalsync.gcal.mapping import event_body, event_times
-from gcalsync.sources.ewig import EwigClient, EwigGroup, fetch_sources
+from gcalsync.sources.ewig import EwigClient, EwigGroup, fetch_sources, teacher_key
+from gcalsync.sources.outlook_csv import CsvFileSource
+from gcalsync.state import SyncState, next_state, save_state, short_key, split_state
 from gcalsync.storage import (
     DEFAULT_TITLE_TEMPLATE,
     CalendarConfig,
@@ -96,20 +99,45 @@ class AutoResult:
     execution: ExecutionResult | None = None
     remaining: list[str] | None = None
     applied: bool = False
+    state_saved: bool = False
+    notes: list[str] | None = None  # ostrzeżenia spoza plików (np. brak prowadzących)
 
 
-def _plan(config: AutoConfig, preview: PreviewResult, api: CalendarApi, now: datetime) -> SyncPlan:
+def _desired(config: AutoConfig, preview: PreviewResult, sources: list[CsvFileSource]):
+    teachers = {source.id: source.teachers for source in sources}
+    result = []
+    for e in preview.events:
+        key = teacher_key(e.course, e.kind, e.seq)
+        teacher = teachers.get(e.source_id, {}).get(key) if key else None
+        body = event_body(e, config.title_template, preview.source_name(e.source_id), teacher)
+        result.append((e, body))
+    return result
+
+
+def _plan(
+    config: AutoConfig,
+    preview: PreviewResult,
+    sources: list[CsvFileSource],
+    api: CalendarApi,
+    now: datetime,
+    deleted: set[str] | None = None,
+) -> tuple[SyncPlan, SyncState, list[dict[str, Any]]]:
     if api.get_calendar(config.calendar.id) is None:
         raise ConfigError(
             f"Kalendarz „{config.calendar.summary}” ({config.calendar.id}) nie istnieje albo "
             "nie został utworzony przez gcalsync."
         )
-    desired = [
-        (e, event_body(e, config.title_template, preview.source_name(e.source_id)))
-        for e in preview.events
-    ]
-    existing = api.list_events(config.calendar.id)
-    return plan_sync(desired, existing, preview.coverage, now)
+    state, existing = split_state(api.list_events(config.calendar.id))
+    plan = plan_sync(
+        _desired(config, preview, sources),
+        existing,
+        preview.coverage,
+        now,
+        deleted_keys=set(state.deleted) if deleted is None else deleted,
+        seen_keys=state.seen,
+        key_id=short_key,
+    )
+    return plan, state, existing
 
 
 def run_auto(
@@ -119,6 +147,7 @@ def run_auto(
     *,
     apply: bool,
     allow_mass_delete: bool = False,
+    restore_deleted: bool = False,
     save_dir: Path | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], None] = time.sleep,
@@ -139,13 +168,28 @@ def run_auto(
             EXIT_FILE_ERRORS, "Błędy w pobranych plikach — nic nie zapisano.", preview=preview
         )
 
+    notes = [
+        f"Nie udało się odczytać prowadzących z planu grupy {g.code} — opisy bez nazwisk."
+        for g, source in zip(config.groups, sources, strict=True)
+        if not source.teachers
+    ]
+    for note in notes:
+        log(f"Ostrzeżenie: {note}")
+
     api = api_factory()
-    plan = _plan(config, preview, api, now())
+    started = now()
+    plan, state, existing = _plan(
+        config, preview, sources, api, started, deleted=set() if restore_deleted else None
+    )
     log(render_sync_text(SyncPreview(preview, plan, config.calendar), apply=apply))
 
-    result = AutoResult(EXIT_OK, "", preview=preview, plan=plan)
+    result = AutoResult(EXIT_OK, "", preview=preview, plan=plan, notes=notes)
     if plan.operation_count == 0:
         result.headline = "Kalendarz jest zgodny z planem — brak zmian."
+        if apply:
+            result.state_saved = _save_state(
+                api, config, state, plan, existing, started, restore_deleted
+            )
         return result
     if not apply:
         result.headline = (
@@ -162,8 +206,14 @@ def run_auto(
 
     runs = (save_dir or Path(tempfile.mkdtemp(prefix="gcalsync-"))) / "runs"
     execution = execute_plan(api, config.calendar.id, plan, Journal.create(runs), sleep=sleep)
-    after = _plan(config, preview, api, now())
+    deleted_now = (set() if restore_deleted else set(state.deleted)) | {
+        short_key(e.key) for e in plan.newly_deleted
+    }
+    after, _, events_after = _plan(config, preview, sources, api, now(), deleted=deleted_now)
     remaining = verify(after)
+    result.state_saved = _save_state(
+        api, config, state, plan, events_after, started, restore_deleted
+    )
     result.execution, result.remaining, result.applied = execution, remaining, True
     summary = f"Zapisano {execution.done} z {execution.total} zmian"
     if execution.failures or execution.aborted or remaining:
@@ -176,6 +226,26 @@ def run_auto(
     else:
         result.headline = f"{summary}. Weryfikacja: kalendarz zgodny z planem."
     return result
+
+
+def _save_state(
+    api: CalendarApi,
+    config: AutoConfig,
+    state: SyncState,
+    plan: SyncPlan,
+    events_after: list[dict[str, Any]],
+    now: datetime,
+    restore: bool,
+) -> bool:
+    """Zapamiętuje obecne zajęcia i usunięte ręcznie (tylko po zapisie, nie w dry-runie)."""
+    new = next_state(
+        state,
+        events_after,
+        [(e.key, e.end) for e in plan.newly_deleted],
+        now,
+        restore=restore,
+    )
+    return save_state(api, config.calendar.id, state, new)
 
 
 # --- podsumowanie dla GitHub Actions (Markdown) -------------------------------------------
@@ -197,6 +267,7 @@ def markdown_summary(result: AutoResult, limit: int = 60) -> str:
         )
         lines += [f"- ⚠️ {i}" for i in p.warnings[:20]]
         lines += [f"- ❌ {i}" for i in p.errors[:20]]
+    lines += [f"- ⚠️ {n}" for n in result.notes or []]
     if plan is not None:
         lines += [
             "",
@@ -221,6 +292,27 @@ def markdown_summary(result: AutoResult, limit: int = 60) -> str:
         lines += changes[:limit]
         if len(changes) > limit:
             lines.append(f"- … i {len(changes) - limit} więcej (pełna lista w logu zadania)")
+        manual = [
+            f"- ✋ {_when(k.existing)} {k.existing.get('summary', '')} "
+            f"({k.reason}: {', '.join(k.manual)})"
+            for k in plan.manual_keeps
+        ] + [
+            f"- ✋ {_when(u.body)} {u.body.get('summary', '')} (zachowane: {', '.join(u.manual)})"
+            for u in plan.updates
+            if u.manual
+        ]
+        if manual:
+            lines += ["", "Zmiany wprowadzone ręcznie w kalendarzu (zachowane):", *manual[:limit]]
+        if plan.deleted_by_user:
+            lines += [
+                "",
+                f"Usunięte ręcznie z kalendarza (nie są dodawane ponownie): "
+                f"{len(plan.deleted_by_user)}.",
+            ]
+            lines += [
+                f"- ✖ {e.start.astimezone(WARSAW):%Y-%m-%d %H:%M} {e.subject_raw} (nowe)"
+                for e in plan.newly_deleted
+            ]
     if result.remaining:
         lines += ["", "Niezgodności po zapisie:"] + [f"- {r}" for r in result.remaining[:20]]
     return "\n".join(lines) + "\n"

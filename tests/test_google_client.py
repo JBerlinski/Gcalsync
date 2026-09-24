@@ -73,6 +73,13 @@ def test_patch_event_sends_only_given_fields():
     assert client.patch_event("cal", "e1", {"location": "13 58"}) == {"location": "13 58"}
 
 
+def test_update_event_is_put_of_whole_body():
+    client = api((200, "echo_request_body"))
+    assert client.update_event("cal", "e1", {"summary": "stan"}) == {"summary": "stan"}
+    request = client._service.events().update(calendarId="cal", eventId="e1", body={})
+    assert request.method == "PUT"
+
+
 @pytest.mark.parametrize("status", [404, 410])
 def test_delete_of_missing_event_is_success(status):
     client = api((status, json.dumps({"error": {"code": status, "message": "Gone"}})))

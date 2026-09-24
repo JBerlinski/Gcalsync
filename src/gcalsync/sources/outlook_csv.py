@@ -11,7 +11,7 @@ import csv
 import hashlib
 import io
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from pathlib import Path
 
@@ -280,6 +280,8 @@ class CsvFileSource:
     data: bytes
     filename: str = ""
     encoding: str | None = None  # None = wykryj automatycznie
+    # Prowadzący spoza pliku (np. ze strony planu ewig): (przedmiot, typ, numer) -> nazwiska.
+    teachers: dict[tuple[str, str, int], str] = field(default_factory=dict)
 
     @classmethod
     def from_path(
