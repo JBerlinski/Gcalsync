@@ -173,6 +173,12 @@ def run_auto(
         for g, source in zip(config.groups, sources, strict=True)
         if not source.teachers
     ]
+    log(
+        "Prowadzący odczytani ze strony planu: "
+        + ", ".join(
+            f"{g.code} {len(s.teachers)}" for g, s in zip(config.groups, sources, strict=True)
+        )
+    )
     for note in notes:
         log(f"Ostrzeżenie: {note}")
 

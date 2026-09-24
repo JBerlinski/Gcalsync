@@ -39,9 +39,13 @@ SID_IN_PAGE = re.compile(r"var sid = new String\('([0-9a-fA-F]+)'\)")
 
 # Komórka planu grupy: tabela z tytułem „Przedmiot - Prowadzący (Typ zajęć)”, w środku skrót
 # typu w nawiasie, np. „(<b …>L</b>)”, i numer zajęć „[5]” — ten sam co w eksporcie CSV.
-PLAN_CELL = re.compile(r'<table[^>]*\btitle="([^"]*)"[^>]*>(.*?)</table>', re.S)
-CELL_KIND = re.compile(r"\(<b[^>]*>([^<]+)</b>\)")
-CELL_SEQ = re.compile(r"<nobr>\[(\d+)\]</nobr>")
+# Wzorce znamy z kopii strony zapisanej przez przeglądarkę (ona normalizuje HTML), dlatego
+# dopuszczają dowolną wielkość liter, oba rodzaje cudzysłowów i białe znaki.
+PLAN_CELL = re.compile(
+    r"""<table\b[^>]*?\btitle\s*=\s*(["'])(.*?)\1[^>]*>(.*?)</table\s*>""", re.S | re.I
+)
+CELL_KIND = re.compile(r"\(\s*<b\b[^>]*>\s*([^<]+?)\s*</b\s*>\s*\)", re.I)
+CELL_SEQ = re.compile(r"<nobr\b[^>]*>\s*\[(\d+)\]\s*</nobr\s*>", re.I)
 
 TeacherKey = tuple[str, str, int]  # (przedmiot, typ zajęć, numer) — po casefold
 
@@ -58,7 +62,7 @@ def parse_teachers(page: str) -> dict[TeacherKey, str]:
     Kilku prowadzących tych samych zajęć (np. podgrupy) jest łączonych przecinkiem.
     """
     found: dict[TeacherKey, list[str]] = {}
-    for title, body in PLAN_CELL.findall(page):
+    for _quote, title, body in PLAN_CELL.findall(page):
         kind, seq = CELL_KIND.search(body), CELL_SEQ.search(body)
         head, sep, _kind_name = html.unescape(title).rpartition(" (")
         course, dash, teacher = head.rpartition(" - ")
