@@ -292,3 +292,33 @@ def test_parse_teachers_tolerates_raw_html_variants():
         "<TR><TD><NOBR> [3] </NOBR></TD></TR></TABLE>"
     )
     assert parse_teachers(raw) == {("geowizualizacja", "w", 3): "dr hab. Inż. Anna Kowalska"}
+
+
+def test_forbidden_plan_page_is_retried_in_new_session():
+    """Tak jak 29.09.2026: HTTP 403 przy planie pierwszej grupy."""
+
+    class ForbiddenOnce(FakeEwig):
+        forbidden = 1
+
+        def send(self, request, **kwargs):
+            q = parse_qsl(urlparse(request.url).query)
+            if ("exv", "WIG23IX2S1") in q and ("opr", "DTXT") not in q and self.forbidden:
+                self.forbidden -= 1
+                self.log.append((request.method, "403", {}))
+                return self._response(request, 403, b"<html>Forbidden</html>")
+            return super().send(request, **kwargs)
+
+    fake = ForbiddenOnce(FILES)
+    c = client(fake)
+    sources = fetch_sources(c, 20261, GROUPS)
+    assert sources[0].data == NEW_GROUP.read_bytes()
+    assert fake.logins == 3
+    assert any("HTTP 403" in note for note in c.notes)
+
+
+def test_forbidden_twice_fails_with_step():
+    fake = FakeEwig(FILES)
+    fake.overrides["DTXT"] = (403, b"")
+    with pytest.raises(EwigError, match="HTTP 403 — krok: eksport WIG23IX2S1"):
+        fetch_sources(client(fake), 20261, GROUPS)
+    assert fake.logins == 2

@@ -160,7 +160,11 @@ def run_auto(
 ) -> AutoResult:
     """Wykonuje jedno uruchomienie. Wyjątki ewig/Google/konfiguracji propagują do wywołującego."""
     log(f"Pobieram plan z ewig: {', '.join(g.code for g in config.groups)}")
-    sources = fetch_sources(ewig, config.semester_iid, config.groups)
+    try:
+        sources = fetch_sources(ewig, config.semester_iid, config.groups)
+    finally:
+        for note in ewig.notes:
+            log(f"ewig: {note}")
     if save_dir is not None:
         files = save_dir / "files"
         files.mkdir(parents=True, exist_ok=True)

@@ -91,6 +91,10 @@ class EwigConnectionError(EwigError):
     """ewig nie odpowiada (timeout, zerwane połączenie, błąd 5xx) mimo ponowień."""
 
 
+class EwigSessionError(EwigError):
+    """ewig odrzucił zapytanie (HTTP 401/403) — zwykle wygasła lub unieważniona sesja."""
+
+
 @dataclass(frozen=True)
 class EwigGroup:
     code: str  # np. WIG23IX2S1
@@ -191,6 +195,7 @@ class EwigClient:
         self.session.headers.setdefault("User-Agent", USER_AGENT)
         self._sleep = sleep
         self.sid: str | None = None
+        self.notes: list[str] = []  # przebieg ponowień — do logu uruchomienia
         self._referer: str | None = None
 
     def _get(self, url: str, step: str) -> requests.Response:
@@ -213,13 +218,15 @@ class EwigClient:
             else:
                 if response.status_code < 500:
                     if response.status_code >= 400:
-                        raise EwigError(
-                            f"ewig zwrócił HTTP {response.status_code} — krok: {where}."
+                        error = (
+                            EwigSessionError if response.status_code in (401, 403) else EwigError
                         )
+                        raise error(f"ewig zwrócił HTTP {response.status_code} — krok: {where}.")
                     self._referer = response.url or url
                     return response
                 last = f"HTTP {response.status_code}"
             if attempt < len(RETRY_DELAYS):
+                self.notes.append(f"ponawiam za {RETRY_DELAYS[attempt]} s — {where}: {last}")
                 self._sleep(RETRY_DELAYS[attempt])
         raise EwigConnectionError(f"Brak połączenia z ewig — krok: {where}: {last}")
 
@@ -336,8 +343,10 @@ def fetch_sources(
             client.pause(PAUSE_BETWEEN_GROUPS)
         try:
             data, teachers = _fetch_in_session(client, semester_iid, group.code)
-        except EwigConnectionError:
-            # Serwer bywa chwilowo przeciążony — jeszcze jedna próba w nowej sesji.
+        except (EwigConnectionError, EwigSessionError) as exc:
+            # Serwer bywa chwilowo przeciążony albo odrzuca sesję (29.09.2026: HTTP 403 przy
+            # planie grupy, choć dzień wcześniej wszystko działało) — próba w nowej sesji.
+            client.notes.append(f"{exc} Ponawiam grupę {group.code} w nowej sesji.")
             client.pause(GROUP_RETRY_DELAY)
             data, teachers = _fetch_in_session(client, semester_iid, group.code)
         parsed = parse_outlook_csv(data, source_id=group.name)

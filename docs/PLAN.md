@@ -279,7 +279,7 @@ temat, źródło, „zarządzane przez gcalsync”), `start/end` z `timeZone`,
 ## 9. Automatyzacja (zastępuje GUI)
 
 Decyzje: pełna automatyzacja z minimalnym sterowaniem przez aplikację GitHub (wariant A);
-GUI (NiceGUI) usunięte; uruchomienie o 0:00, 6:00, 12:00 i 18:00 czasu polskiego (cron w UTC w obu kandydackich godzinach + krok sprawdzający godzinę w Warszawie); grupy WIG23IX2S1 (priorytet 1)
+GUI (NiceGUI) usunięte; uruchomienie o 0:00, 6:00, 12:00 i 18:00 czasu polskiego (cron w UTC w obu kandydackich godzinach; bez sprawdzania godziny, bo GitHub opóźnia harmonogram o 1–4 h i część uruchomień pomija — krok sprawdzający godzinę usunięty 29.09.2026); grupy WIG23IX2S1 (priorytet 1)
 i WIG23IX1S1 (priorytet 2); semestr 2026/2027 zimowy (`iid=20261`); BIM zawsze wykluczany;
 logowanie z opcją „Aktualności”; ewig dostępny bez VPN.
 
