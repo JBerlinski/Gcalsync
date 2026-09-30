@@ -23,6 +23,11 @@ przez reguły i synchronizuje kalendarz „Plan WAT”. Nazwiska prowadzących s
 ze strony planu grupy (eksport CSV ich nie zawiera). Konfiguracja bez sekretów:
 [`gcalsync.config.json`](gcalsync.config.json) (grupy i ich priorytet, semestr, reguły, szablon tytułu, ID kalendarza, `auto_apply`).
 
+**Awaria ewig:** uruchomienie z harmonogramu ponawia pobieranie jeszcze dwa razy co 10 minut.
+Jeśli ewig dalej nie działa, a ostatnia udana synchronizacja była mniej niż dobę temu,
+uruchomienie kończy się ostrzeżeniem ⚠️ (bez e-maila) i kolejne spróbuje ponownie. E-mail
+przychodzi dopiero, gdy kalendarz nie był synchronizowany od ponad doby.
+
 Zapis następuje tylko, gdy: pliki z ewig pobrały się i nie mają błędów, kalendarz jest dostępny
 i nie zadziałał bezpiecznik masowego usuwania. Inaczej zadanie kończy się błędem (e-mail od
 GitHuba), a kalendarz zostaje nietknięty. Podsumowanie zmian jest w raporcie uruchomienia,

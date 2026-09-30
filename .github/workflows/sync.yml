@@ -36,7 +36,8 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Z ponowieniami po awarii ewig (2 × 10 min przerwy) uruchomienie może trwać dłużej.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -57,7 +58,10 @@ jobs:
           MODE: ${{ github.event_name == 'schedule' && '--apply-if-enabled' || (inputs.apply && '--apply' || '') }}
           MASS: ${{ inputs.allow_mass_delete && '--allow-mass-delete' || '' }}
           RESTORE: ${{ inputs.restore_deleted && '--restore-deleted' || '' }}
-        run: uv run --frozen --no-dev gcalsync auto $MODE $MASS $RESTORE --save-dir run-output --summary "$GITHUB_STEP_SUMMARY"
+          # Uruchomienia z harmonogramu: gdy ewig nie działa, jeszcze 2 próby co 10 minut;
+          # awaria krótsza niż doba od ostatniej udanej synchronizacji nie jest błędem (bez e-maila).
+          OUTAGE: ${{ github.event_name == 'schedule' && '--ewig-retries 2 --ewig-retry-wait 600 --tolerate-ewig-outage 24' || '' }}
+        run: uv run --frozen --no-dev gcalsync auto $MODE $MASS $RESTORE $OUTAGE --save-dir run-output --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Pliki z ewig i dziennik (7 dni)
         if: always()

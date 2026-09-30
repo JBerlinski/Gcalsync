@@ -10,7 +10,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from gcalsync import __version__
@@ -28,6 +28,7 @@ from gcalsync.auto import (
     DEFAULT_CONFIG_FILE,
     EXIT_EXTERNAL,
     AutoResult,
+    ewig_outage_result,
     load_auto_config,
     markdown_summary,
     run_auto,
@@ -39,7 +40,12 @@ from gcalsync.gcal.auth import AuthError, credentials_from_json, login, logout
 from gcalsync.gcal.client import CalendarApi, GoogleApiError, GoogleCalendarApi
 from gcalsync.gcal.executor import last_run, run_warning
 from gcalsync.report import preview_to_dict, render_text
-from gcalsync.sources.ewig import EwigClient, EwigError
+from gcalsync.sources.ewig import (
+    EwigClient,
+    EwigConnectionError,
+    EwigError,
+    EwigSessionError,
+)
 from gcalsync.sources.outlook_csv import CsvFileSource
 from gcalsync.storage import (
     DEFAULT_CALENDAR_NAME,
@@ -247,6 +253,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-mass-delete",
         action="store_true",
         help="pozwól na zapis mimo zadziałania bezpiecznika masowego usuwania",
+    )
+    auto.add_argument(
+        "--ewig-retries",
+        type=int,
+        default=0,
+        metavar="N",
+        help="ile razy ponowić całe pobieranie, gdy ewig jest niedostępny (domyślnie 0)",
+    )
+    auto.add_argument(
+        "--ewig-retry-wait",
+        type=int,
+        default=600,
+        metavar="SEKUNDY",
+        help="przerwa przed ponowieniem pobierania z ewig (domyślnie 600 = 10 min)",
+    )
+    auto.add_argument(
+        "--tolerate-ewig-outage",
+        type=float,
+        default=0,
+        metavar="GODZINY",
+        help="awaria ewig nie jest błędem, jeśli ostatnia udana synchronizacja była nie "
+        "dawniej niż tyle godzin temu (bez e-maila od GitHuba)",
     )
     auto.add_argument(
         "--restore-deleted",
@@ -494,6 +522,7 @@ class Context:
     api_factory: Callable[[Paths], CalendarApi]
     ask: Callable[[str], str] = input
     sleep: Callable[[float], None] = time.sleep
+    now: Callable[[], datetime] = lambda: datetime.now(UTC)
 
     def api(self) -> CalendarApi:
         return self.api_factory(self.paths)
@@ -646,20 +675,45 @@ def cmd_auto(args: argparse.Namespace, ctx: Context) -> int:
     apply = args.apply or (args.apply_if_enabled and config.auto_apply)
     if args.apply_if_enabled and not config.auto_apply:
         print("Zapis wyłączony w konfiguracji (auto_apply = false) — tylko dry-run.\n")
+
+    def google():
+        return GoogleCalendarApi(credentials_from_json(os.environ.get("GOOGLE_TOKEN_JSON", "")))
+
+    attempts = 1 + max(args.ewig_retries, 0)
     try:
-        ewig = EwigClient(os.environ.get("EWIG_LOGIN", ""), os.environ.get("EWIG_PASSWORD", ""))
-        result = run_auto(
-            config,
-            ewig,
-            lambda: GoogleCalendarApi(
-                credentials_from_json(os.environ.get("GOOGLE_TOKEN_JSON", ""))
-            ),
-            apply=apply,
-            allow_mass_delete=args.allow_mass_delete,
-            restore_deleted=args.restore_deleted,
-            save_dir=args.save_dir,
-            sleep=ctx.sleep,
-        )
+        for attempt in range(1, attempts + 1):
+            ewig = EwigClient(os.environ.get("EWIG_LOGIN", ""), os.environ.get("EWIG_PASSWORD", ""))
+            try:
+                result = run_auto(
+                    config,
+                    ewig,
+                    google,
+                    apply=apply,
+                    allow_mass_delete=args.allow_mass_delete,
+                    restore_deleted=args.restore_deleted,
+                    save_dir=args.save_dir,
+                    sleep=ctx.sleep,
+                )
+                break
+            except (EwigConnectionError, EwigSessionError) as exc:
+                if attempt < attempts:
+                    minutes = args.ewig_retry_wait / 60
+                    print(
+                        f"ewig niedostępny ({exc}). Kolejna próba za {minutes:g} min "
+                        f"({attempt + 1}/{attempts}).",
+                        flush=True,
+                    )
+                    ctx.sleep(args.ewig_retry_wait)
+                    continue
+                if args.tolerate_ewig_outage <= 0:
+                    raise
+                result = ewig_outage_result(
+                    exc,
+                    config,
+                    google,
+                    timedelta(hours=args.tolerate_ewig_outage),
+                    ctx.now(),
+                )
     except (EwigError, AuthError, GoogleApiError, ConfigError) as exc:
         result = AutoResult(
             EXIT_EXTERNAL if not isinstance(exc, ConfigError) else EXIT_USAGE, f"Błąd: {exc}"
@@ -695,6 +749,7 @@ def main(
     api_factory: Callable[[Paths], CalendarApi] = google_api,
     ask: Callable[[str], str] = input,
     sleep: Callable[[float], None] = time.sleep,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> int:
     # Konsola Windows lub przekierowanie do pliku mogą nie obsługiwać wszystkich znaków.
     for stream in (sys.stdout, sys.stderr):
@@ -707,7 +762,13 @@ def main(
     if handler is None:
         parser.print_help()
         return EXIT_OK
-    ctx = Context(paths=paths or Paths.default(), api_factory=api_factory, ask=ask, sleep=sleep)
+    ctx = Context(
+        paths=paths or Paths.default(),
+        api_factory=api_factory,
+        ask=ask,
+        sleep=sleep,
+        now=now,
+    )
     try:
         return handler(args, ctx)
     except (CliError, ConfigError) as exc:
