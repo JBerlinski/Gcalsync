@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from gcalsync.core.normalize import WARSAW
@@ -49,9 +49,12 @@ class SyncState:
     seen: set[str] = field(default_factory=set)
     deleted: dict[str, str] = field(default_factory=dict)  # klucz -> data zajęć (RRRRMMDD)
     duplicates: list[dict[str, Any]] = field(default_factory=list)  # nadmiarowe zdarzenia stanu
+    last_ok: datetime | None = None  # koniec ostatniej udanej synchronizacji z zapisem
 
     def properties(self) -> dict[str, str]:
         props = {PROP_STATE: "1"}
+        if self.last_ok is not None:
+            props["last_ok"] = self.last_ok.astimezone(UTC).isoformat(timespec="seconds")
         props |= _pack("seen", sorted(self.seen))
         props |= _pack("del", [f"{k}:{d}" for k, d in sorted(self.deleted.items())])
         return props
@@ -92,6 +95,12 @@ def split_state(events: list[dict[str, Any]]) -> tuple[SyncState, list[dict[str,
             for item in _unpack(props, "del"):
                 key, _, day = item.partition(":")
                 state.deleted[key] = day
+            try:
+                last = datetime.fromisoformat(props["last_ok"])
+            except (KeyError, ValueError):
+                continue
+            if state.last_ok is None or last > state.last_ok:
+                state.last_ok = last
     return state, others
 
 
@@ -120,7 +129,9 @@ def next_state(
     for key, end in newly_deleted:
         deleted[short_key(key)] = end.astimezone(WARSAW).strftime("%Y%m%d")
     deleted = {k: d for k, d in deleted.items() if d >= today}
-    return SyncState(state.event, present_keys(events_after, now), deleted, state.duplicates)
+    return SyncState(
+        state.event, present_keys(events_after, now), deleted, state.duplicates, last_ok=now
+    )
 
 
 def state_body(state: SyncState) -> dict[str, Any]:

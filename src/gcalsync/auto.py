@@ -15,7 +15,7 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +25,8 @@ from gcalsync.core.merge import ConflictPolicy
 from gcalsync.core.normalize import WARSAW
 from gcalsync.core.pipeline import PreviewResult, build_preview
 from gcalsync.core.rules import ExclusionRule, RuleError
-from gcalsync.gcal.client import CalendarApi
+from gcalsync.gcal.auth import AuthError
+from gcalsync.gcal.client import CalendarApi, GoogleApiError
 from gcalsync.gcal.executor import ExecutionResult, Journal, execute_plan, verify
 from gcalsync.gcal.mapping import event_body, event_times
 from gcalsync.sources.ewig import EwigClient, EwigGroup, fetch_sources, teacher_key
@@ -101,6 +102,7 @@ class AutoResult:
     applied: bool = False
     state_saved: bool = False
     notes: list[str] | None = None  # ostrzeżenia spoza plików (np. brak prowadzących)
+    warning: bool = False  # zakończone bez zapisu, ale bez błędu (np. chwilowa awaria ewig)
 
 
 def _desired(config: AutoConfig, preview: PreviewResult, sources: list[CsvFileSource]):
@@ -263,6 +265,43 @@ def _save_state(
     return save_state(api, config.calendar.id, state, new)
 
 
+def ewig_outage_result(
+    exc: Exception,
+    config: AutoConfig,
+    api_factory: Callable[[], CalendarApi],
+    tolerate: timedelta,
+    now: datetime,
+) -> AutoResult:
+    """Wynik uruchomienia, w którym ewig był niedostępny mimo ponowień.
+
+    Chwilowa awaria ewig to nie powód do alarmu: jeśli ostatnia udana synchronizacja była
+    niedawno (w granicy `tolerate`), uruchomienie kończy się bez błędu — GitHub nie wysyła
+    wtedy e-maila, a kolejne uruchomienie z harmonogramu spróbuje ponownie.
+    """
+    detail = f"ewig niedostępny: {exc}"
+    try:
+        api = api_factory()
+        state, _ = split_state(api.list_events(config.calendar.id))
+    except (GoogleApiError, AuthError) as google_exc:
+        return AutoResult(EXIT_EXTERNAL, f"Błąd: {detail} (stan z Google: {google_exc})")
+    if state.last_ok is None:
+        return AutoResult(EXIT_EXTERNAL, f"Błąd: {detail}")
+    since = now - state.last_ok
+    last = state.last_ok.astimezone(WARSAW).strftime("%Y-%m-%d %H:%M")
+    hours = int(since.total_seconds() // 3600)
+    if since <= tolerate:
+        return AutoResult(
+            EXIT_OK,
+            f"{detail}. Kalendarz bez zmian — ostatnia udana synchronizacja: {last} "
+            f"({hours} h temu). Następne uruchomienie spróbuje ponownie.",
+            warning=True,
+        )
+    return AutoResult(
+        EXIT_EXTERNAL,
+        f"Błąd: {detail}. Brak udanej synchronizacji od {last} (ponad {hours} h).",
+    )
+
+
 # --- podsumowanie dla GitHub Actions (Markdown) -------------------------------------------
 
 
@@ -273,6 +312,8 @@ def _when(resource: dict[str, Any]) -> str:
 
 def markdown_summary(result: AutoResult, limit: int = 60) -> str:
     icon = {EXIT_OK: "✅", EXIT_SAFETY_STOP: "⛔"}.get(result.exit_code, "❌")
+    if result.warning:
+        icon = "⚠️"
     lines = [f"## {icon} gcalsync", "", result.headline, ""]
     p, plan = result.preview, result.plan
     if p is not None:

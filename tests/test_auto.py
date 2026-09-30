@@ -1,7 +1,7 @@
 """Tryb automatyczny: ewig (atrapa) -> potok -> kalendarz (atrapa)."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -379,3 +379,65 @@ def test_class_removed_from_start_of_plan_is_deleted(config, api):
         for e in classes(api, config.calendar.id)
         if e["start"]["dateTime"].startswith("2026-10-01T09:50")
     ]
+
+
+# --- awaria ewig: ponowienie po przerwie i tolerancja bez e-maila --------------------------
+
+
+def down_ewig():
+    """ewig zwracający 503 na każdą stronę (jak 30.09.2026)."""
+    fake = FakeEwig(FILES)
+    fake.overrides["/ed2/"] = (503, b"Service Unavailable")
+    session = requests.Session()
+    session.mount("https://", fake)
+    return EwigClient("login", "sekret", session=session, sleep=lambda _s: None)
+
+
+def auto_cli(cli_env, *extra, now=None, sleeps=None):
+    kwargs = {"sleep": (sleeps.append if sleeps is not None else lambda _s: None)}
+    if now is not None:
+        kwargs["now"] = now
+    return cli.main(["auto", "--config", str(cli_env), *extra], **kwargs)
+
+
+def test_cli_retries_ewig_after_wait(monkeypatch, cli_env, api, capsys):
+    clients = iter([down_ewig(), ewig_client()])
+    monkeypatch.setattr(cli, "EwigClient", lambda login, password: next(clients))
+    sleeps = []
+    code = auto_cli(cli_env, "--apply", "--ewig-retries", "2", sleeps=sleeps)
+    assert code == 0
+    assert 600 in sleeps
+    assert "Kolejna próba za 10 min (2/3)" in capsys.readouterr().out
+    assert len(classes(api, next(iter(api.calendars)))) == 75
+
+
+def test_cli_recent_success_makes_outage_a_warning(monkeypatch, cli_env, tmp_path):
+    assert auto_cli(cli_env, "--apply") == 0  # zapisuje czas udanej synchronizacji
+    monkeypatch.setattr(cli, "EwigClient", lambda login, password: down_ewig())
+    summary = tmp_path / "s.md"
+    later = lambda: datetime.now(UTC) + timedelta(hours=5)  # noqa: E731
+    code = auto_cli(
+        cli_env, "--apply", "--tolerate-ewig-outage", "24", "--summary", str(summary), now=later
+    )
+    assert code == 0  # bez błędu = bez e-maila od GitHuba
+    text = summary.read_text("utf-8")
+    assert text.startswith("## ⚠️ gcalsync") and "ewig niedostępny" in text
+    assert "ostatnia udana synchronizacja" in text
+
+
+def test_cli_long_outage_is_an_error(monkeypatch, cli_env):
+    assert auto_cli(cli_env, "--apply") == 0
+    monkeypatch.setattr(cli, "EwigClient", lambda login, password: down_ewig())
+    much_later = lambda: datetime.now(UTC) + timedelta(hours=30)  # noqa: E731
+    assert auto_cli(cli_env, "--apply", "--tolerate-ewig-outage", "24", now=much_later) == 3
+
+
+def test_cli_outage_without_tolerance_is_an_error(monkeypatch, cli_env):
+    assert auto_cli(cli_env, "--apply") == 0
+    monkeypatch.setattr(cli, "EwigClient", lambda login, password: down_ewig())
+    assert auto_cli(cli_env, "--apply") == 3
+
+
+def test_cli_outage_before_any_success_is_an_error(monkeypatch, cli_env):
+    monkeypatch.setattr(cli, "EwigClient", lambda login, password: down_ewig())
+    assert auto_cli(cli_env, "--apply", "--tolerate-ewig-outage", "24") == 3
