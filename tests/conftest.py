@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -33,3 +34,15 @@ def default_group_bytes() -> bytes:
 @pytest.fixture
 def new_group_bytes() -> bytes:
     return NEW_GROUP.read_bytes()
+
+
+# Dzień, w którym powstały próbki: wszystkie zajęcia są jeszcze przed nami. Testy nie mogą
+# zależeć od prawdziwej daty (5.10.2026 część zajęć z próbek była już zakończona).
+TODAY = datetime(2026, 9, 23, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def frozen_clock(monkeypatch):
+    from gcalsync import clock
+
+    monkeypatch.setattr(clock, "now", lambda: TODAY)

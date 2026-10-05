@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 import requests
-from conftest import DEFAULT_GROUP, NEW_GROUP, make_csv, row
+from conftest import DEFAULT_GROUP, NEW_GROUP, TODAY, make_csv, row
 from fake_calendar import FakeCalendarApi
 from fake_ewig import FakeEwig
 
@@ -415,7 +415,7 @@ def test_cli_recent_success_makes_outage_a_warning(monkeypatch, cli_env, tmp_pat
     assert auto_cli(cli_env, "--apply") == 0  # zapisuje czas udanej synchronizacji
     monkeypatch.setattr(cli, "EwigClient", lambda login, password: down_ewig())
     summary = tmp_path / "s.md"
-    later = lambda: datetime.now(UTC) + timedelta(hours=5)  # noqa: E731
+    later = lambda: TODAY + timedelta(hours=5)  # noqa: E731
     code = auto_cli(
         cli_env, "--apply", "--tolerate-ewig-outage", "24", "--summary", str(summary), now=later
     )
@@ -428,7 +428,7 @@ def test_cli_recent_success_makes_outage_a_warning(monkeypatch, cli_env, tmp_pat
 def test_cli_long_outage_is_an_error(monkeypatch, cli_env):
     assert auto_cli(cli_env, "--apply") == 0
     monkeypatch.setattr(cli, "EwigClient", lambda login, password: down_ewig())
-    much_later = lambda: datetime.now(UTC) + timedelta(hours=30)  # noqa: E731
+    much_later = lambda: TODAY + timedelta(hours=30)  # noqa: E731
     assert auto_cli(cli_env, "--apply", "--tolerate-ewig-outage", "24", now=much_later) == 3
 
 
@@ -441,3 +441,30 @@ def test_cli_outage_without_tolerance_is_an_error(monkeypatch, cli_env):
 def test_cli_outage_before_any_success_is_an_error(monkeypatch, cli_env):
     monkeypatch.setattr(cli, "EwigClient", lambda login, password: down_ewig())
     assert auto_cli(cli_env, "--apply", "--tolerate-ewig-outage", "24") == 3
+
+
+def test_cli_wrong_password_is_not_retried(monkeypatch, cli_env):
+    fake = FakeEwig(FILES, password="inne")
+    session = requests.Session()
+    session.mount("https://", fake)
+    wrong = EwigClient("login", "sekret", session=session, sleep=lambda _s: None)
+    monkeypatch.setattr(cli, "EwigClient", lambda login, password: wrong)
+    sleeps = []
+    code = auto_cli(
+        cli_env, "--apply", "--ewig-retries", "2", "--tolerate-ewig-outage", "24", sleeps=sleeps
+    )
+    assert code == 3
+    assert 600 not in sleeps
+    assert fake.logins == 0
+
+
+def test_cli_odd_page_after_login_is_retried(monkeypatch, cli_env):
+    """Tak jak 5.10.2026: po logowaniu ewig zwrócił nieznaną stronę."""
+    odd = FakeEwig(FILES)
+    odd.overrides["/ed2/index.php"] = (200, b"<html>Serwer przeciazony</html>")
+    session = requests.Session()
+    session.mount("https://", odd)
+    broken = EwigClient("login", "sekret", session=session, sleep=lambda _s: None)
+    clients = iter([broken, ewig_client()])
+    monkeypatch.setattr(cli, "EwigClient", lambda login, password: next(clients))
+    assert auto_cli(cli_env, "--apply", "--ewig-retries", "2") == 0

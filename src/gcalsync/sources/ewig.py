@@ -176,6 +176,15 @@ class _LoginFormParser(HTMLParser):
             self.in_form = False
 
 
+def _page_hint(page: str, limit: int = 200) -> str:
+    """Początek widocznego tekstu strony — do diagnozy w logu (bez danych zalogowanego)."""
+    text = re.sub(r"<(script|style)\b.*?</\1\s*>", " ", page, flags=re.S | re.I)
+    text = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", text)).split())
+    if "Zalogowany" in text:  # strona po zalogowaniu zawiera imię i nazwisko — nie logujemy
+        return "(strona zalogowanego użytkownika bez identyfikatora sesji)"
+    return (text[:limit] + "…") if len(text) > limit else (text or "(pusta)")
+
+
 # --- klient -------------------------------------------------------------------------------
 
 
@@ -259,7 +268,10 @@ class EwigClient:
         if "Zalogowany" not in text or not match:
             if 'name="userid"' in text or "name=userid" in text:
                 raise EwigLoginError("Logowanie do ewig nie powiodło się — sprawdź login i hasło.")
-            raise EwigError("Nieoczekiwana odpowiedź po logowaniu — strona ewig się zmieniła.")
+            raise EwigSessionError(
+                "Nieoczekiwana odpowiedź po logowaniu (ewig przeciążony albo strona się zmieniła)"
+                f" — treść strony: „{_page_hint(text)}”."
+            )
         self.sid = match.group(1)
         return self.sid
 
