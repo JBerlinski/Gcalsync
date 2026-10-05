@@ -10,10 +10,10 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from gcalsync import __version__
+from gcalsync import __version__, clock
 from gcalsync.app import (
     PlanChangedError,
     apply_sync,
@@ -40,12 +40,7 @@ from gcalsync.gcal.auth import AuthError, credentials_from_json, login, logout
 from gcalsync.gcal.client import CalendarApi, GoogleApiError, GoogleCalendarApi
 from gcalsync.gcal.executor import last_run, run_warning
 from gcalsync.report import preview_to_dict, render_text
-from gcalsync.sources.ewig import (
-    EwigClient,
-    EwigConnectionError,
-    EwigError,
-    EwigSessionError,
-)
+from gcalsync.sources.ewig import EwigClient, EwigError, EwigLoginError
 from gcalsync.sources.outlook_csv import CsvFileSource
 from gcalsync.storage import (
     DEFAULT_CALENDAR_NAME,
@@ -522,7 +517,7 @@ class Context:
     api_factory: Callable[[Paths], CalendarApi]
     ask: Callable[[str], str] = input
     sleep: Callable[[float], None] = time.sleep
-    now: Callable[[], datetime] = lambda: datetime.now(UTC)
+    now: Callable[[], datetime] = lambda: clock.now()
 
     def api(self) -> CalendarApi:
         return self.api_factory(self.paths)
@@ -695,7 +690,11 @@ def cmd_auto(args: argparse.Namespace, ctx: Context) -> int:
                     sleep=ctx.sleep,
                 )
                 break
-            except (EwigConnectionError, EwigSessionError) as exc:
+            except EwigError as exc:
+                # Błędny login/hasło zgłaszamy od razu (ponawianie grozi blokadą konta);
+                # wszystko inne z ewig (przeciążenie, dziwne strony, uszkodzony eksport) ponawiamy.
+                if isinstance(exc, EwigLoginError):
+                    raise
                 if attempt < attempts:
                     minutes = args.ewig_retry_wait / 60
                     print(
@@ -749,7 +748,7 @@ def main(
     api_factory: Callable[[Paths], CalendarApi] = google_api,
     ask: Callable[[str], str] = input,
     sleep: Callable[[float], None] = time.sleep,
-    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    now: Callable[[], datetime] = lambda: clock.now(),
 ) -> int:
     # Konsola Windows lub przekierowanie do pliku mogą nie obsługiwać wszystkich znaków.
     for stream in (sys.stdout, sys.stderr):

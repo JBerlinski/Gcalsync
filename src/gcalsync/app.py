@@ -5,9 +5,10 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
+from gcalsync import clock
 from gcalsync.core.diff import SyncPlan, plan_sync
 from gcalsync.core.pipeline import PreviewResult, build_preview
 from gcalsync.gcal.auth import load_credentials
@@ -95,7 +96,7 @@ def build_sync_preview(
         desired,
         existing,
         preview.coverage,
-        now or datetime.now(UTC),
+        now or clock.now(),
         deleted_keys=set(state.deleted),
         seen_keys=state.seen,
         key_id=short_key,

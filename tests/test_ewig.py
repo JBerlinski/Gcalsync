@@ -147,6 +147,18 @@ def test_empty_or_broken_csv_is_error():
         fetch_sources(client(fake), 20261, GROUPS)
 
 
+def test_unexpected_page_after_login_is_session_error_with_hint():
+    from gcalsync.sources.ewig import EwigSessionError
+
+    fake = FakeEwig(FILES)
+    fake.overrides["/ed2/index.php"] = (
+        200,
+        b"<html><body><h1>Przerwa techniczna</h1></body></html>",
+    )
+    with pytest.raises(EwigSessionError, match="Przerwa techniczna"):
+        client(fake).login()
+
+
 def test_changed_login_page_is_reported():
     fake = FakeEwig(FILES)
     fake.overrides["/ed2/"] = (200, b"<html>przerwa techniczna</html>")

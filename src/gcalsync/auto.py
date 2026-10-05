@@ -15,10 +15,11 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from gcalsync import clock
 from gcalsync.app import SyncPreview
 from gcalsync.core.diff import SyncPlan, plan_sync
 from gcalsync.core.merge import ConflictPolicy
@@ -156,7 +157,7 @@ def run_auto(
     allow_mass_delete: bool = False,
     restore_deleted: bool = False,
     save_dir: Path | None = None,
-    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    now: Callable[[], datetime] = lambda: clock.now(),
     sleep: Callable[[float], None] = time.sleep,
     log: Callable[[str], None] = print,
 ) -> AutoResult:
