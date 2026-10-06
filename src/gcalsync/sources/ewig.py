@@ -23,6 +23,7 @@ from urllib.parse import urlencode, urlparse
 import requests
 
 from gcalsync.core.normalize import normalize_text
+from gcalsync.sources.ewig_plan import grid_to_csv, parse_plan_grid
 from gcalsync.sources.outlook_csv import CsvFileSource, parse_outlook_csv
 
 BASE_URL = "https://ewig.wcy.wat.edu.pl/ed2/"
@@ -309,6 +310,23 @@ class EwigClient:
         plan = self._text(self._get(group_plan_url(self.sid, semester_iid, group), f"plan {group}"))
         if group not in plan:
             raise EwigError(f"Nie udało się otworzyć planu grupy {group}.")
+        teachers = parse_teachers(plan)
+        grid = parse_plan_grid(plan, semester_iid)
+        try:
+            data = self._export(semester_iid, group)
+        except (EwigConnectionError, EwigSessionError) as exc:
+            # Eksport bywa zepsuty (od 5.10.2026 zrywał połączenie), a strona planu działa:
+            # ten sam plan odczytany z siatki na stronie.
+            if not grid:
+                raise
+            self.notes.append(
+                f"{exc} Plan grupy {group} odczytany ze strony planu ({len(grid)} zajęć)."
+            )
+            return grid_to_csv(grid), teachers
+        self._compare_with_grid(group, data, grid)
+        return data, teachers
+
+    def _export(self, semester_iid: int, group: str) -> bytes:
         response = self._get(
             export_url(self.sid, semester_iid, group), f"eksport {group}", retry=False
         )
@@ -323,7 +341,24 @@ class EwigClient:
                 f"Eksport planu grupy {group} zwrócił stronę HTML zamiast pliku CSV "
                 f"({_describe(response)}; treść: „{_page_hint(self._text(response))}”)."
             )
-        return data, parse_teachers(plan)
+        return data
+
+    def _compare_with_grid(self, group: str, data: bytes, grid: list) -> None:
+        """Kontrola zapasowego źródła: plan ze strony powinien zgadzać się z eksportem."""
+        if not grid:
+            self.notes.append(f"Nie odczytano siatki planu grupy {group} ze strony planu.")
+            return
+
+        def keys(raw_events):
+            return {(e.subject, e.start_date, e.start_time, e.end_time) for e in raw_events}
+
+        exported = keys(parse_outlook_csv(data).events)
+        from_page = keys(parse_outlook_csv(grid_to_csv(grid)).events)
+        if exported != from_page:
+            self.notes.append(
+                f"Plan grupy {group} ze strony różni się od eksportu: tylko w eksporcie "
+                f"{len(exported - from_page)}, tylko na stronie {len(from_page - exported)}."
+            )
 
     def logout(self) -> None:
         if self.sid is None:

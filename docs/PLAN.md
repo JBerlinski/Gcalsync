@@ -324,3 +324,15 @@ Decyzja: ręczne zmiany w kalendarzu są zachowywane „na stałe” (zastępuje
   Stan zapisuje tylko uruchomienie z zapisem (dry-run niczego nie zapisuje), pełnym PUT.
   Limity właściwości (klucz ≤ 44, wartość ≤ 1024, ≤ 300 właściwości, ≤ 32 kB) —
   zweryfikowane w dokumentacji „Extended properties”. Przywrócenie: `--restore-deleted`.
+
+## 11. Zapasowe źródło planu: siatka na stronie planu grupy
+
+Od 5.10.2026 eksport CSV ewig zrywał połączenie (nagłówek `Content-Length: 3000`, zero bajtów
+treści; przy powtórzeniu pusty plik), choć logowanie i strona planu działały. Strona planu
+grupy zawiera pełną siatkę semestru: bloki dni tygodnia, wiersz dat („30<br>IX”), wiersze
+bloków godzinowych („08:00<br>09:35”) i po komórce na datę z tabelą zajęć (tytuł
+„Przedmiot - Prowadzący (Forma)”, skrót formy, sala, numer). `sources/ewig_plan.py` zamienia
+ją na plik w formacie eksportu — na stronie z 23.09.2026 wynik zgadzał się z eksportem 30/30.
+Gdy eksport zawodzi, plan pochodzi ze strony (notatka w logu); gdy działa, oba źródła są
+porównywane i rozbieżność trafia do logu. Rok dat: semestr zimowy — wrzesień–grudzień rok
+startu, styczeń–marzec następny; letni — rok następny.

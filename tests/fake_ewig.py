@@ -63,19 +63,65 @@ def plan_cell(course: str, kind: str, seq: int, room: str, teacher: str) -> str:
     )
 
 
-def plan_page(group: str, data: bytes | None = None) -> str:
+ROMAN_MONTHS = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"]
+WEEKDAYS = ["PONIEDZIAŁEK", "WTOREK", "ŚRODA", "CZWARTEK", "PIĄTEK", "SOBOTA", "NIEDZIELA"]
+SLOTS = [("08:00", "09:35"), ("09:50", "11:25"), ("11:40", "13:15"), ("13:30", "15:05"),
+         ("16:00", "17:35"), ("17:50", "19:25"), ("19:40", "21:15")]  # fmt: skip
+EMPTY = '<td class="tdFormList1DSheTeaGrpHTM3" style="">&nbsp;</td>'
+
+
+def plan_grid(data: bytes | None) -> str:
+    """Siatka planu o budowie jak na prawdziwej stronie: bloki dni tygodnia, wiersz dat,
+    wiersze bloków godzinowych i po jednej komórce na datę (zmyślone nazwiska)."""
+    from datetime import timedelta
+
     from gcalsync.core.normalize import parse_subject
     from gcalsync.sources.outlook_csv import parse_outlook_csv
 
-    cells = []
-    for raw in parse_outlook_csv(data).events if data else []:
+    events = parse_outlook_csv(data).events if data else []
+    if not events:
+        return ""
+    first = min(e.start_date for e in events)
+    last = max(e.start_date for e in events)
+    monday = first - timedelta(days=first.weekday())
+    weeks = (last - monday).days // 7 + 1
+    by_slot = {}
+    for raw in events:
         course, kind, seq = parse_subject(raw.subject)
-        if kind and seq:
-            cells.append(plan_cell(course, kind, seq, raw.location, teacher_for(course, kind)))
+        key = (raw.start_date, raw.start_time.strftime("%H:%M"))
+        by_slot.setdefault(key, []).append(
+            plan_cell(course, kind, seq, raw.location, teacher_for(course, kind))
+        )
+    rows = []
+    for weekday, name in enumerate(WEEKDAYS):
+        dates = [monday + timedelta(days=7 * w + weekday) for w in range(weeks)]
+        header = "".join(
+            '<td class="tdFormList1DDSheTeaGrpHTM3" valign="middle" style="">'
+            f"<nobr>{d.day:02d}<br>{ROMAN_MONTHS[d.month - 1]}</nobr></td>"
+            for d in dates
+        )
+        rows.append(
+            f'<tr><td valign="middle" class="tdFormList1DDSheTeaGrpHTM0" rowspan="8">'
+            f"<nobr>{'<br>'.join(name)}</nobr></td>"
+            '<td class="tdFormList1DDSheTeaGrpHTM1">nr.<br>i</td>'
+            '<td class="tdFormList1DDSheTeaGrpHTM2">&nbsp;bloku<br>&nbsp;czas</td>'
+            f"{header}</tr>"
+        )
+        for number, (start, end) in enumerate(SLOTS, 1):
+            cells = "".join("".join(by_slot.get((d, start), [])) or EMPTY for d in dates)
+            rows.append(
+                f'<tr><td class="tdFormList1DSheTeaGrpHTM1"><nobr>{number}</nobr></td>'
+                f'<td class="tdFormList1DSheTeaGrpHTM1"><nobr>{start}<br>{end}</nobr></td>'
+                f"{cells}</tr>"
+            )
+    return f'<table class="tableFormList1SheTeaGrpHTM" border="1">{"".join(rows)}</table>'
+
+
+def plan_page(group: str, data: bytes | None = None) -> str:
     return (
         f"<html><body><script>var sid = new String('{SID}');</script>"
         f"<a href=\"javascript:downloadCSV('TXT');\">eksport</a>"
-        f"<div>{group} (2026-09-23)</div><table><tr>{''.join(cells)}</tr></table></body></html>"
+        f"<div>{group} (2026-09-23)</div>{plan_grid(data)}</body></html>"
     )
 
 
