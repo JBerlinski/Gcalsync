@@ -288,7 +288,9 @@ def test_parse_teachers_on_page_without_cells_is_empty():
 
 
 def test_fetch_sources_attaches_teachers():
-    sources = fetch_sources(client(FakeEwig(FILES)), 20261, GROUPS)
+    c = client(FakeEwig(FILES))
+    sources = fetch_sources(c, 20261, GROUPS)
+    assert c.notes == []  # eksport działa i zgadza się z siatką na stronie planu
     assert sources[0].teachers[("analizy teledetekcyjne", "l", 1)] == (
         "dr inż. Analizy Laboratorium"
     )
@@ -328,36 +330,37 @@ def test_forbidden_plan_page_is_retried_in_new_session():
     assert any("HTTP 403" in note for note in c.notes)
 
 
-def test_forbidden_twice_fails_with_step():
+def test_forbidden_export_falls_back_to_plan_page():
     fake = FakeEwig(FILES)
     fake.overrides["DTXT"] = (403, b"")
-    with pytest.raises(EwigError, match="HTTP 403 — krok: eksport WIG23IX2S1"):
-        fetch_sources(client(fake), 20261, GROUPS)
-    assert fake.logins == 2
+    c = client(fake)
+    sources = fetch_sources(c, 20261, GROUPS)
+    assert same_events(sources[0].data, NEW_GROUP.read_bytes())
+    assert same_events(sources[1].data, DEFAULT_GROUP.read_bytes())
+    assert any(
+        "HTTP 403 — krok: eksport WIG23IX2S1" in n and "ze strony planu" in n for n in c.notes
+    )
+    assert fake.logins == 2  # bez ponawiania: strona planu wystarczyła
 
 
-def test_export_dropped_then_empty_is_retried_in_new_session():
-    """Tak jak 6.10.2026: eksport zrywał połączenie, a jego powtórzenie dawało pusty plik."""
+def test_dropped_export_uses_plan_page():
+    """Tak jak 6.10.2026: eksport zrywał połączenie (Content-Length bez treści)."""
 
     class DropsExport(FakeEwig):
-        drops = 1
-
         def send(self, request, **kwargs):
-            q = parse_qsl(urlparse(request.url).query)
-            if ("opr", "DTXT") in q and ("exv", "WIG23IX2S1") in q and self.drops:
-                self.drops -= 1
+            if ("opr", "DTXT") in parse_qsl(urlparse(request.url).query):
                 self.log.append((request.method, "drop", {}))
-                raise requests.exceptions.ConnectionError("Remote end closed connection")
+                raise requests.exceptions.ChunkedEncodingError("IncompleteRead(0 bytes read)")
             return super().send(request, **kwargs)
 
     fake = DropsExport(FILES)
     c = client(fake)
     sources = fetch_sources(c, 20261, GROUPS)
-    assert sources[0].data == NEW_GROUP.read_bytes()
-    # Bez powtórzenia eksportu w tej samej sesji: od razu nowa sesja dla grupy.
-    assert [p for _, p, _ in fake.log].count("drop") == 1
-    assert fake.logins == 3
-    assert any("Ponawiam grupę WIG23IX2S1" in n for n in c.notes)
+    assert same_events(sources[0].data, NEW_GROUP.read_bytes())
+    assert same_events(sources[1].data, DEFAULT_GROUP.read_bytes())
+    # Eksport próbowany raz na grupę, bez powtórek w tej samej sesji.
+    assert [p for _, p, _ in fake.log].count("drop") == 2
+    assert fake.logins == 2
 
 
 def test_empty_export_is_session_error_with_diagnostics():
@@ -367,3 +370,33 @@ def test_empty_export_is_session_error_with_diagnostics():
     with pytest.raises(EwigSessionError, match=r"jest pusty \(HTTP 200, Content-Type"):
         fetch_sources(client(fake), 20261, GROUPS)
     assert fake.logins == 2  # ponowione raz w nowej sesji
+
+
+def event_set(data: bytes):
+    return {
+        (r.subject, " ".join(r.location.split()), r.start_date, r.start_time, r.end_time)
+        for r in parse_outlook_csv(data).events
+    }
+
+
+def same_events(a: bytes, b: bytes) -> bool:
+    return event_set(a) == event_set(b)
+
+
+@pytest.mark.parametrize("sample", [NEW_GROUP, DEFAULT_GROUP])
+def test_plan_page_grid_matches_export(sample):
+    from fake_ewig import plan_page
+
+    from gcalsync.sources.ewig_plan import grid_to_csv, parse_plan_grid
+
+    grid = parse_plan_grid(plan_page("X", sample.read_bytes()), 20261)
+    data = grid_to_csv(grid)
+    assert parse_outlook_csv(data).issues == []
+    assert same_events(data, sample.read_bytes())
+
+
+def test_grid_year_follows_semester():
+    from gcalsync.sources.ewig_plan import _year
+
+    assert (_year(10, 20261), _year(1, 20261)) == (2026, 2027)  # zimowy 2026/2027
+    assert (_year(3, 20262), _year(9, 20262)) == (2027, 2027)  # letni 2026/2027
