@@ -334,3 +334,36 @@ def test_forbidden_twice_fails_with_step():
     with pytest.raises(EwigError, match="HTTP 403 — krok: eksport WIG23IX2S1"):
         fetch_sources(client(fake), 20261, GROUPS)
     assert fake.logins == 2
+
+
+def test_export_dropped_then_empty_is_retried_in_new_session():
+    """Tak jak 6.10.2026: eksport zrywał połączenie, a jego powtórzenie dawało pusty plik."""
+
+    class DropsExport(FakeEwig):
+        drops = 1
+
+        def send(self, request, **kwargs):
+            q = parse_qsl(urlparse(request.url).query)
+            if ("opr", "DTXT") in q and ("exv", "WIG23IX2S1") in q and self.drops:
+                self.drops -= 1
+                self.log.append((request.method, "drop", {}))
+                raise requests.exceptions.ConnectionError("Remote end closed connection")
+            return super().send(request, **kwargs)
+
+    fake = DropsExport(FILES)
+    c = client(fake)
+    sources = fetch_sources(c, 20261, GROUPS)
+    assert sources[0].data == NEW_GROUP.read_bytes()
+    # Bez powtórzenia eksportu w tej samej sesji: od razu nowa sesja dla grupy.
+    assert [p for _, p, _ in fake.log].count("drop") == 1
+    assert fake.logins == 3
+    assert any("Ponawiam grupę WIG23IX2S1" in n for n in c.notes)
+
+
+def test_empty_export_is_session_error_with_diagnostics():
+    from gcalsync.sources.ewig import EwigSessionError
+
+    fake = FakeEwig({**FILES, "WIG23IX2S1": b""})
+    with pytest.raises(EwigSessionError, match=r"jest pusty \(HTTP 200, Content-Type"):
+        fetch_sources(client(fake), 20261, GROUPS)
+    assert fake.logins == 2  # ponowione raz w nowej sesji
