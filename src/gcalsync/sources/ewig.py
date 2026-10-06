@@ -176,6 +176,21 @@ class _LoginFormParser(HTMLParser):
             self.in_form = False
 
 
+def _describe(response: requests.Response) -> str:
+    """Nagłówki i czas odpowiedzi — do diagnozy w logu (bez danych sesji)."""
+    h = response.headers
+    parts = [
+        f"HTTP {response.status_code}",
+        f"Content-Type: {h.get('Content-Type', '-')}",
+        f"Content-Length: {h.get('Content-Length', '-')}",
+        f"Content-Disposition: {h.get('Content-Disposition', '-')}",
+        f"bajtów: {len(response.content)}",
+    ]
+    if response.elapsed:
+        parts.append(f"czas: {response.elapsed.total_seconds():.1f} s")
+    return ", ".join(parts)
+
+
 def _page_hint(page: str, limit: int = 200) -> str:
     """Początek widocznego tekstu strony — do diagnozy w logu (bez danych zalogowanego)."""
     text = re.sub(r"<(script|style)\b.*?</\1\s*>", " ", page, flags=re.S | re.I)
@@ -207,17 +222,24 @@ class EwigClient:
         self.notes: list[str] = []  # przebieg ponowień — do logu uruchomienia
         self._referer: str | None = None
 
-    def _get(self, url: str, step: str) -> requests.Response:
-        return self._request("GET", url, step)
+    def _get(self, url: str, step: str, *, retry: bool = True) -> requests.Response:
+        return self._request("GET", url, step, retry=retry)
 
-    def _request(self, method: str, url: str, step: str, **kwargs) -> requests.Response:
-        """Zapytanie jak z przeglądarki: Referer poprzedniej strony, ponowienia z przerwami."""
+    def _request(
+        self, method: str, url: str, step: str, *, retry: bool = True, **kwargs
+    ) -> requests.Response:
+        """Zapytanie jak z przeglądarki: Referer poprzedniej strony, ponowienia z przerwami.
+
+        `retry=False` — bez ponowień w tej samej sesji (eksport: po zerwanym połączeniu ewig
+        zwracał przy powtórzeniu pusty plik; pomaga dopiero cała grupa w nowej sesji).
+        """
         headers = {"Referer": self._referer} if self._referer else {}
         if method == "POST":
             headers["Origin"] = BASE_URL.rstrip("/").rsplit("/", 1)[0]
         where = f"{step} ({urlparse(url).path})"  # bez parametrów: zawierają identyfikator sesji
         last: str = ""
-        for attempt in range(len(RETRY_DELAYS) + 1):  # ponowienia przy błędzie sieci lub 5xx
+        delays = RETRY_DELAYS if retry else ()
+        for attempt in range(len(delays) + 1):  # ponowienia przy błędzie sieci lub 5xx
             try:
                 response = self.session.request(
                     method, url, headers=headers, timeout=TIMEOUT_SECONDS, **kwargs
@@ -234,9 +256,9 @@ class EwigClient:
                     self._referer = response.url or url
                     return response
                 last = f"HTTP {response.status_code}"
-            if attempt < len(RETRY_DELAYS):
-                self.notes.append(f"ponawiam za {RETRY_DELAYS[attempt]} s — {where}: {last}")
-                self._sleep(RETRY_DELAYS[attempt])
+            if attempt < len(delays):
+                self.notes.append(f"ponawiam za {delays[attempt]} s — {where}: {last}")
+                self._sleep(delays[attempt])
         raise EwigConnectionError(f"Brak połączenia z ewig — krok: {where}: {last}")
 
     def pause(self, seconds: float) -> None:
@@ -287,10 +309,20 @@ class EwigClient:
         plan = self._text(self._get(group_plan_url(self.sid, semester_iid, group), f"plan {group}"))
         if group not in plan:
             raise EwigError(f"Nie udało się otworzyć planu grupy {group}.")
-        data = self._get(export_url(self.sid, semester_iid, group), f"eksport {group}").content
+        response = self._get(
+            export_url(self.sid, semester_iid, group), f"eksport {group}", retry=False
+        )
+        data = response.content
         head = data[:512].lstrip().lower()
+        if not data.strip():
+            raise EwigSessionError(
+                f"Eksport planu grupy {group} jest pusty ({_describe(response)})."
+            )
         if head.startswith(b"<") or b"<html" in head:
-            raise EwigError(f"Eksport planu grupy {group} zwrócił stronę HTML zamiast pliku CSV.")
+            raise EwigSessionError(
+                f"Eksport planu grupy {group} zwrócił stronę HTML zamiast pliku CSV "
+                f"({_describe(response)}; treść: „{_page_hint(self._text(response))}”)."
+            )
         return data, parse_teachers(plan)
 
     def logout(self) -> None:
