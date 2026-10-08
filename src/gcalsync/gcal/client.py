@@ -30,6 +30,7 @@ class CalendarApi(Protocol):
 
     def create_calendar(self, summary: str, time_zone: str, description: str) -> dict[str, Any]: ...
 
+    def patch_calendar(self, calendar_id: str, body: dict[str, Any]) -> dict[str, Any]: ...
     def list_events(self, calendar_id: str) -> list[dict[str, Any]]: ...
 
     def insert_event(self, calendar_id: str, body: dict[str, Any]) -> dict[str, Any]: ...
@@ -108,6 +109,11 @@ class GoogleCalendarApi:
             raise _explain(exc, "utworzenie kalendarza") from exc
         except NETWORK_ERRORS as exc:
             raise _network(exc, "utworzenie kalendarza") from exc
+
+    def patch_calendar(self, calendar_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Zmiana właściwości kalendarza (np. nazwy) — zakres calendar.app.created to obejmuje."""
+        request = self._service.calendars().patch(calendarId=calendar_id, body=body)
+        return self._execute(request, "zmiana kalendarza")
 
     def list_events(self, calendar_id: str) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
