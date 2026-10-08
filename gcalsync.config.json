@@ -1,20 +1,49 @@
 {
-  "version": 1,
+  "version": 2,
   "ewig": {
-    "semester_iid": 20261,
-    "groups": [
-      { "code": "WIG23IX2S1", "name": "Grupa kierunkowa" },
-      { "code": "WIG23IX1S1", "name": "Grupa domyślna" }
-    ]
+    "semester_iid": 20261
   },
-  "rules": [
-    { "field": "course", "op": "equals", "value": "Modelowanie danych do BIM" }
-  ],
   "policy": "priority",
   "title_template": "{course} ({kind})",
-  "calendar": {
-    "id": "fe3cc06d2d1a57c87c6d2fb0401eafce74c9ff6fcab223f715bffc6391715dd8@group.calendar.google.com",
-    "summary": "Plan WAT"
-  },
-  "auto_apply": true
+  "auto_apply": true,
+  "plans": [
+    {
+      "name": "WIG23IX2S1",
+      "groups": [
+        {
+          "code": "WIG23IX2S1",
+          "name": "Grupa kierunkowa"
+        },
+        {
+          "code": "WIG23IX1S1",
+          "name": "Grupa domyślna"
+        }
+      ],
+      "rules": [
+        {
+          "field": "course",
+          "op": "equals",
+          "value": "Modelowanie danych do BIM"
+        }
+      ],
+      "calendar": {
+        "id": "fe3cc06d2d1a57c87c6d2fb0401eafce74c9ff6fcab223f715bffc6391715dd8@group.calendar.google.com",
+        "summary": "WIG23IX2S1"
+      }
+    },
+    {
+      "name": "WIG23IX1S1",
+      "groups": [
+        {
+          "code": "WIG23IX1S1",
+          "name": "Grupa WIG23IX1S1"
+        }
+      ],
+      "rules": [],
+      "calendar": {
+        "id": null,
+        "summary": "WIG23IX1S1"
+      }
+    }
+  ]
 }

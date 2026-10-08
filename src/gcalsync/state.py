@@ -7,9 +7,10 @@ pamięta sam:
 - `deleted` — zajęcia usunięte ręcznie; nie są dodawane ponownie, dopóki nie minie ich
   termin (albo do przywrócenia opcją --restore-deleted).
 
-Stan leży w jednym technicznym zdarzeniu całodniowym z 1 stycznia 2000 r. w kalendarzu
-„Plan WAT” (znaczniki w extendedProperties.private: do 300 właściwości, klucz ≤ 44 znaki,
-wartość ≤ 1024 znaki, łącznie ≤ 32 kB — zweryfikowane w dokumentacji Calendar API).
+Stan leży w jednym technicznym zdarzeniu całodniowym z 1 stycznia 2000 r. w każdym
+synchronizowanym kalendarzu (znaczniki w extendedProperties.private: do 300 właściwości,
+klucz ≤ 44 znaki, wartość ≤ 1024 znaki, łącznie ≤ 32 kB — zweryfikowane w dokumentacji
+Calendar API).
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ VALUE_LIMIT = 1000  # zapas poniżej limitu 1024 znaków wartości
 STATE_DATE = "2000-01-01"
 STATE_SUMMARY = "gcalsync — dane techniczne (nie usuwaj)"
 STATE_DESCRIPTION = (
-    "To zdarzenie przechowuje listę zajęć usuniętych ręcznie z kalendarza „Plan WAT”, "
+    "To zdarzenie przechowuje listę zajęć usuniętych ręcznie z tego kalendarza, "
     "żeby gcalsync nie dodawał ich ponownie. Usunięcie go przywróci wszystkie usunięte "
     "zajęcia przy następnej synchronizacji."
 )

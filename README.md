@@ -19,9 +19,22 @@ Wszystkie polecenia uruchamiasz w katalogu repozytorium: `uv run gcalsync …`.
 Zadanie `.github/workflows/sync.yml` w okolicach 0:00, 6:00, 12:00 i 18:00 (czas polski; GitHub
 bywa spóźniony o kilka godzin) loguje się
 do ewig, pobiera plan grup (to samo co ikona eksportu „w formacie OutLook”), przepuszcza go
-przez reguły i synchronizuje kalendarz „Plan WAT”. Nazwiska prowadzących są odczytywane
+przez reguły i synchronizuje kalendarze planów. Nazwiska prowadzących są odczytywane
 ze strony planu grupy (eksport CSV ich nie zawiera). Konfiguracja bez sekretów:
-[`gcalsync.config.json`](gcalsync.config.json) (grupy i ich priorytet, semestr, reguły, szablon tytułu, ID kalendarza, `auto_apply`).
+[`gcalsync.config.json`](gcalsync.config.json): semestr, szablon tytułu, `auto_apply` i lista
+planów. Każdy plan to osobny kalendarz z własnymi grupami (w kolejności priorytetu)
+i regułami wykluczeń:
+
+| plan / kalendarz | grupy | wykluczone |
+|---|---|---|
+| WIG23IX2S1 | WIG23IX2S1, potem WIG23IX1S1 | Modelowanie danych do BIM |
+| WIG23IX1S1 | WIG23IX1S1 | — |
+
+Każda grupa jest pobierana z ewig raz, nawet gdy korzysta z niej kilka planów. Plan bez ID
+kalendarza (`"id": null`) dostaje nowy kalendarz przy pierwszym zapisie, a automat dopisuje
+jego ID do `gcalsync.config.json` osobnym commitem. Nazwa kalendarza w Google jest
+ustawiana zgodnie z polem `summary`. Kalendarz możesz udostępnić innym w ustawieniach
+Kalendarza Google („Udostępnij określonym osobom”).
 
 **Awaria ewig:** uruchomienie z harmonogramu ponawia pobieranie jeszcze dwa razy co 10 minut.
 Jeśli ewig dalej nie działa, a ostatnia udana synchronizacja była mniej niż dobę temu,
@@ -41,7 +54,7 @@ i podsumowania. `auto_apply` w `gcalsync.config.json` włącza zapis z uruchomie
 
 ### Ręczne zmiany w kalendarzu
 
-Zajęcia w „Plan WAT” można zmieniać bezpośrednio w Kalendarzu Google (także z telefonu),
+Zajęcia w kalendarzach planów można zmieniać bezpośrednio w Kalendarzu Google (także z telefonu),
 a synchronizacja tych zmian nie cofa:
 
 - **Przeniesienie, zmiana sali, tytułu lub opisu** — zmienione pole zostaje takie, jak je
@@ -52,10 +65,10 @@ a synchronizacja tych zmian nie cofa:
 - **Usunięcie** — usunięte zajęcia nie są dodawane ponownie. Przywrócenie wszystkich:
   „Run workflow” z zaznaczonymi opcjami zapisu i „Przywróć zajęcia usunięte ręcznie”.
 - **Zajęcia przeniesione ręcznie, których nie ma już w planie**, zostają w kalendarzu.
-- **Własne wydarzenia** dodane do „Plan WAT” nigdy nie są ruszane.
+- **Własne wydarzenia** dodane do kalendarza planu nigdy nie są ruszane.
 
 Listę usuniętych zajęć gcalsync trzyma w technicznym zdarzeniu z 1 stycznia 2000 r.
-w kalendarzu „Plan WAT” („gcalsync — dane techniczne”) — nie usuwaj go. Wszystkie zachowane
+w każdym kalendarzu planu („gcalsync — dane techniczne”) — nie usuwaj go. Wszystkie zachowane
 ręczne zmiany i usunięcia są wypisane w podsumowaniu uruchomienia.
 
 ### Jednorazowa konfiguracja

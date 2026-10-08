@@ -336,3 +336,19 @@ ją na plik w formacie eksportu — na stronie z 23.09.2026 wynik zgadzał się 
 Gdy eksport zawodzi, plan pochodzi ze strony (notatka w logu); gdy działa, oba źródła są
 porównywane i rozbieżność trafia do logu. Rok dat: semestr zimowy — wrzesień–grudzień rok
 startu, styczeń–marzec następny; letni — rok następny.
+
+## 12. Kilka planów (kalendarz na grupę)
+
+Konfiguracja w wersji 2 ma listę planów; każdy ma nazwę, grupy (kolejność = priorytet),
+reguły wykluczeń i kalendarz (`id`, `summary`). Obecnie:
+- **WIG23IX2S1** — grupy WIG23IX2S1 i WIG23IX1S1, bez „Modelowanie danych do BIM” (dawny
+  „Plan WAT”, ten sam kalendarz — nazwa zmieniana przez `calendars.patch`),
+- **WIG23IX1S1** — sama grupa WIG23IX1S1 (z BIM, bez Analiz teledetekcyjnych).
+
+Każda grupa jest pobierana z ewig raz na uruchomienie. Kalendarz planu z `"id": null` jest
+tworzony przy pierwszym zapisie (`calendars.insert` w zakresie `calendar.app.created`), a jego
+ID dopisywane do `gcalsync.config.json`; krok workflow commituje tę zmianę (uprawnienie
+`contents: write`). Zakres nie pozwala listować kalendarzy, więc ID musi być zapisane w repo —
+bez tego każde uruchomienie tworzyłoby nowy kalendarz. Błąd jednego planu nie zatrzymuje
+pozostałych; kod wyjścia to najpoważniejszy z wyników. Konfiguracja w wersji 1 (jeden kalendarz)
+nadal się wczytuje.

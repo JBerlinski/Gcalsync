@@ -73,6 +73,11 @@ def test_patch_event_sends_only_given_fields():
     assert client.patch_event("cal", "e1", {"location": "13 58"}) == {"location": "13 58"}
 
 
+def test_patch_calendar_sends_summary():
+    client = api((200, "echo_request_body"))
+    assert client.patch_calendar("cal", {"summary": "WIG23IX2S1"}) == {"summary": "WIG23IX2S1"}
+
+
 def test_update_event_is_put_of_whole_body():
     client = api((200, "echo_request_body"))
     assert client.update_event("cal", "e1", {"summary": "stan"}) == {"summary": "stan"}

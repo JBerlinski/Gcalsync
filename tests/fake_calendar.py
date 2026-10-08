@@ -63,6 +63,14 @@ class FakeCalendarApi:
         self.events[cal_id] = {}
         return copy.deepcopy(self.calendars[cal_id])
 
+    def patch_calendar(self, calendar_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append(f"patch_calendar {calendar_id}")
+        self.writes += 1
+        if calendar_id not in self.calendars:
+            raise GoogleApiError("not found", 404)
+        self.calendars[calendar_id].update(copy.deepcopy(body))
+        return copy.deepcopy(self.calendars[calendar_id])
+
     def list_events(self, calendar_id: str) -> list[dict[str, Any]]:
         self.calls.append(f"list_events {calendar_id}")
         if calendar_id not in self.events:

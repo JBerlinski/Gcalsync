@@ -30,7 +30,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write # tylko do zapisu ID nowo utworzonego kalendarza w gcalsync.config.json
   actions: write # tylko do podtrzymania harmonogramu (ostatni krok)
 
 jobs:
@@ -40,6 +40,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # do git pull --rebase przy zapisie ID nowego kalendarza
 
       - uses: actions/setup-python@v5
         with:
@@ -62,6 +64,20 @@ jobs:
           # awaria krótsza niż doba od ostatniej udanej synchronizacji nie jest błędem (bez e-maila).
           OUTAGE: ${{ github.event_name == 'schedule' && '--ewig-retries 2 --ewig-retry-wait 600 --tolerate-ewig-outage 24' || '' }}
         run: uv run --frozen --no-dev gcalsync auto $MODE $MASS $RESTORE $OUTAGE --save-dir run-output --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Zapis ID nowego kalendarza w konfiguracji
+        if: always()
+        run: |
+          if git diff --quiet -- gcalsync.config.json; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --quiet -m "Konfiguracja: ID nowo utworzonego kalendarza" -- gcalsync.config.json
+          for attempt in 1 2 3; do
+            git pull --rebase --quiet && git push --quiet && exit 0
+            sleep 5
+          done
+          echo "::error::Nie udało się zapisać ID kalendarza w repozytorium — dopisz je ręcznie."
+          exit 1
 
       - name: Pliki z ewig i dziennik (7 dni)
         if: always()

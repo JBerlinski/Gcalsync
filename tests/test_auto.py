@@ -43,14 +43,22 @@ def api():
     return FakeCalendarApi()
 
 
+def repo_data(calendar_ids: dict[str, str | None], *, auto_apply=False) -> dict:
+    """Konfiguracja z repozytorium z planami z `calendar_ids` (nazwa planu -> ID kalendarza)."""
+    data = json.loads(REPO_CONFIG.read_text("utf-8"))
+    data["plans"] = [p for p in data["plans"] if p["name"] in calendar_ids]
+    for plan in data["plans"]:
+        plan["calendar"]["id"] = calendar_ids[plan["name"]]
+    data["auto_apply"] = auto_apply  # testy włączają zapis cykliczny same, gdy go potrzebują
+    return data
+
+
 @pytest.fixture
 def config(api, tmp_path):
-    cal = api.create_calendar("Plan WAT", "Europe/Warsaw", "x")
-    data = json.loads(REPO_CONFIG.read_text("utf-8"))
-    data["calendar"]["id"] = cal["id"]
-    data["auto_apply"] = False  # testy włączają zapis cykliczny same, gdy go potrzebują
+    """Jeden plan: WIG23IX2S1 (obie grupy, bez BIM) w istniejącym kalendarzu."""
+    cal = api.create_calendar("WIG23IX2S1", "Europe/Warsaw", "x")
     path = tmp_path / "gcalsync.config.json"
-    path.write_text(json.dumps(data), "utf-8")
+    path.write_text(json.dumps(repo_data({"WIG23IX2S1": cal["id"]})), "utf-8")
     return load_auto_config(path)
 
 
@@ -71,8 +79,14 @@ def test_repo_config_is_valid():
     config = load_auto_config(REPO_CONFIG)
     assert [g.code for g in config.groups] == ["WIG23IX2S1", "WIG23IX1S1"]
     assert config.semester_iid == 20261
-    assert config.rules[0].value == "Modelowanie danych do BIM"
     assert config.auto_apply is True  # włączone po udanym dry-runie i ręcznym zapisie
+    first, second = config.plans
+    assert (first.name, first.calendar.summary) == ("WIG23IX2S1", "WIG23IX2S1")
+    assert [g.code for g in first.groups] == ["WIG23IX2S1", "WIG23IX1S1"]
+    assert first.rules[0].value == "Modelowanie danych do BIM"
+    assert (second.name, second.calendar.summary) == ("WIG23IX1S1", "WIG23IX1S1")
+    assert [g.code for g in second.groups] == ["WIG23IX1S1"]
+    assert second.rules == []  # BIM zostaje w planie grupy WIG23IX1S1
 
 
 def test_dry_run_writes_nothing(config, api):
@@ -139,10 +153,23 @@ def test_markdown_summary(config, api):
 @pytest.mark.parametrize(
     ("patch", "message"),
     [
-        ({"version": 2}, "wersja"),
-        ({"ewig": {"semester_iid": 20261, "groups": []}}, "pusta"),
-        ({"rules": [{"field": "x", "op": "equals", "value": "y"}]}, "Błąd"),
-        ({"calendar": None}, "Błąd"),
+        ({"version": 3}, "wersja"),
+        ({"plans": []}, "pusta"),
+        ({"plans": [{"name": "A", "groups": [], "calendar": {"summary": "A"}}]}, "pusta"),
+        (
+            {
+                "plans": [
+                    {
+                        "name": "A",
+                        "groups": [{"code": "X", "name": "X"}],
+                        "rules": [{"field": "x", "op": "equals", "value": "y"}],
+                        "calendar": {"summary": "A"},
+                    }
+                ]
+            },
+            "Błąd",
+        ),
+        ({"plans": [{"name": "A", "groups": [{"code": "X", "name": "X"}]}]}, "Błąd"),
     ],
 )
 def test_invalid_config(tmp_path, patch, message):
@@ -468,3 +495,89 @@ def test_cli_odd_page_after_login_is_retried(monkeypatch, cli_env):
     clients = iter([broken, ewig_client()])
     monkeypatch.setattr(cli, "EwigClient", lambda login, password: next(clients))
     assert auto_cli(cli_env, "--apply", "--ewig-retries", "2") == 0
+
+
+# --- dwa plany: WIG23IX2S1 (bez BIM) i WIG23IX1S1 (z BIM) -------------------------------
+
+
+@pytest.fixture
+def two_plans(api, tmp_path):
+    """Konfiguracja z repozytorium: istniejący kalendarz „Plan WAT” i plan bez kalendarza."""
+    cal = api.create_calendar("Plan WAT", "Europe/Warsaw", "x")
+    path = tmp_path / "two.json"
+    path.write_text(json.dumps(repo_data({"WIG23IX2S1": cal["id"], "WIG23IX1S1": None})), "utf-8")
+    return load_auto_config(path)
+
+
+def courses(api, calendar_id) -> set[str]:
+    return {e["summary"].split(" (")[0] for e in classes(api, calendar_id)}
+
+
+def test_two_plans_dry_run_creates_nothing(two_plans, api):
+    result = run(two_plans, api, apply=False)
+    assert result.exit_code == EXIT_OK
+    first, second = result.plans
+    assert len(first.plan.adds) == 75 and len(second.plan.adds) == 75
+    assert len(api.calendars) == 1 and api.writes == 0
+    assert api.calendars[two_plans.plans[0].calendar.id]["summary"] == "Plan WAT"
+
+
+def test_two_plans_apply_creates_second_calendar_and_renames_first(two_plans, api):
+    result = run(two_plans, api, apply=True)
+    assert result.exit_code == EXIT_OK, result.headline
+    first_id = two_plans.plans[0].calendar.id
+    assert api.calendars[first_id]["summary"] == "WIG23IX2S1"  # „Plan WAT” -> nazwa grupy
+
+    second = result.plans[1]
+    created = second.calendar_created
+    assert created and api.calendars[created]["summary"] == "WIG23IX1S1"
+    saved = json.loads(two_plans.path.read_text("utf-8"))
+    assert saved["plans"][1]["calendar"]["id"] == created  # ID trafia do konfiguracji
+
+    assert courses(api, first_id) == {
+        "Analizy teledetekcyjne",
+        "Geowizualizacja",
+        "Seminarium dyplomowe",
+    }
+    assert courses(api, created) == {
+        "Geowizualizacja",
+        "Seminarium dyplomowe",
+        "Modelowanie danych do BIM",
+    }
+
+    again = run(load_auto_config(two_plans.path), api, apply=True)
+    assert [r.plan.operation_count for r in again.plans] == [0, 0]
+    assert len(api.calendars) == 2  # bez drugiego kalendarza przy kolejnym uruchomieniu
+    text = markdown_summary(again)
+    assert "### ✅ WIG23IX2S1" in text and "### ✅ WIG23IX1S1" in text
+
+
+def test_shared_group_is_downloaded_once(two_plans, api):
+    fake = FakeEwig(FILES)
+    session = requests.Session()
+    session.mount("https://", fake)
+    client = EwigClient("login", "sekret", session=session, sleep=lambda _s: None)
+    run_auto(two_plans, client, lambda: api, apply=False, now=lambda: NOW, log=lambda _m: None)
+    assert fake.logins == 2  # WIG23IX2S1 i WIG23IX1S1, mimo że WIG23IX1S1 jest w obu planach
+
+
+def test_failure_of_one_plan_does_not_stop_the_other(two_plans, api):
+    two_plans.plans[0].calendar.id = "nie-ma@group.calendar.google.com"
+    result = run(two_plans, api, apply=True)
+    assert result.exit_code == 3
+    assert "nie istnieje" in result.plans[0].headline
+    assert result.plans[1].exit_code == EXIT_OK
+    assert courses(api, result.plans[1].calendar_created)
+
+
+def test_old_single_calendar_config_still_loads(tmp_path):
+    old = {
+        "version": 1,
+        "ewig": {"semester_iid": 20261, "groups": [{"code": "WIG23IX2S1", "name": "A"}]},
+        "rules": [],
+        "calendar": {"id": "x@group.calendar.google.com", "summary": "Plan WAT"},
+    }
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps(old), "utf-8")
+    [plan] = load_auto_config(path).plans
+    assert plan.calendar.id == "x@group.calendar.google.com"
