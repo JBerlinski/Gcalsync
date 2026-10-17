@@ -1,4 +1,5 @@
-from urllib.parse import parse_qsl, urlparse
+import re
+from urllib.parse import parse_qs, parse_qsl, urlparse
 
 import pytest
 import requests
@@ -7,6 +8,7 @@ from fake_ewig import SID, FakeEwig
 
 from gcalsync.sources.ewig import (
     EwigClient,
+    EwigConnectionError,
     EwigError,
     EwigGroup,
     EwigLoginError,
@@ -400,3 +402,54 @@ def test_grid_year_follows_semester():
 
     assert (_year(10, 20261), _year(1, 20261)) == (2026, 2027)  # zimowy 2026/2027
     assert (_year(3, 20262), _year(9, 20262)) == (2027, 2027)  # letni 2026/2027
+
+
+MONDAY_PLAN = make_csv(
+    row("Geowizualizacja (L) [1]", "2026-10-01 08:00", "2026-10-01 09:35"),
+    row("Modelowanie danych do BIM (Ep) [1]", "2027-01-18 09:50", "2027-01-18 11:25", "15 57"),
+)
+DAY_CELL = re.compile(r'<td valign="middle" class="tdFormList1DDSheTeaGrpHTM0".*?</td>', re.S)
+
+
+def test_grid_reads_cells_before_first_weekday_cell():
+    """17.10.2026: jedyne zajęcia w poniedziałek (BIM Ep, 18.01) znikały z planu ze strony,
+    a synchronizacja usuwała je z kalendarza. Siatka jest czytana od początku tabeli, także
+    gdy daty poniedziałków stoją w niej przed komórką dnia tygodnia."""
+    from fake_ewig import plan_page
+
+    from gcalsync.sources.ewig_plan import grid_to_csv, missing_from_grid, parse_plan_grid
+
+    page = plan_page("X", MONDAY_PLAN)
+    day = DAY_CELL.search(page).group(0)
+    # Komórka „PONIEDZIAŁEK” na końcu pierwszego wiersza, za datami.
+    page = page.replace(day, "", 1)
+    first_row_end = page.index("</tr>")
+    page = page[:first_row_end] + day + page[first_row_end:]
+    grid = parse_plan_grid(page, 20261)
+    assert same_events(grid_to_csv(grid), MONDAY_PLAN)
+    assert missing_from_grid(page, grid) == []
+
+
+def test_incomplete_grid_does_not_replace_export():
+    """Zajęcia na stronie poza siatką: plan ze strony nie zastępuje eksportu (inaczej
+    synchronizacja usunęłaby je z kalendarza) — zostaje błąd połączenia z ewig."""
+    from fake_ewig import plan_cell
+
+    class StrayCell(FakeEwig):
+        def send(self, request, **kwargs):
+            if ("opr", "DTXT") in parse_qsl(urlparse(request.url).query):
+                raise requests.exceptions.ConnectionError("Connection aborted.")
+            response = super().send(request, **kwargs)
+            if "exv" in parse_qs(urlparse(request.url).query):
+                cell = plan_cell("Modelowanie danych do BIM", "Ep", 1, "15 57", "dr X")
+                extra = f"<table><tr>{cell}</tr></table>".encode("iso-8859-2")
+                response._content = response._content.replace(b"</body>", extra + b"</body>")
+            return response
+
+    c = client(StrayCell(FILES))
+    with pytest.raises(EwigConnectionError):
+        fetch_sources(c, 20261, GROUPS)
+    assert any(
+        "odczytana niekompletnie" in n and "Modelowanie danych do BIM (Ep) [1]" in n
+        for n in c.notes
+    )

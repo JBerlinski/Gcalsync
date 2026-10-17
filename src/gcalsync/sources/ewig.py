@@ -23,7 +23,7 @@ from urllib.parse import urlencode, urlparse
 import requests
 
 from gcalsync.core.normalize import normalize_text
-from gcalsync.sources.ewig_plan import grid_to_csv, parse_plan_grid
+from gcalsync.sources.ewig_plan import grid_to_csv, missing_from_grid, parse_plan_grid
 from gcalsync.sources.outlook_csv import CsvFileSource, parse_outlook_csv
 
 BASE_URL = "https://ewig.wcy.wat.edu.pl/ed2/"
@@ -318,6 +318,12 @@ class EwigClient:
             # Eksport bywa zepsuty (od 5.10.2026 zrywał połączenie), a strona planu działa:
             # ten sam plan odczytany z siatki na stronie.
             if not grid:
+                raise
+            if missing := missing_from_grid(plan, grid):
+                self.notes.append(
+                    f"Siatka planu grupy {group} na stronie odczytana niekompletnie (bez dat: "
+                    f"{', '.join(missing[:5])}) — nie zastąpi eksportu."
+                )
                 raise
             self.notes.append(
                 f"{exc} Plan grupy {group} odczytany ze strony planu ({len(grid)} zajęć)."

@@ -334,7 +334,11 @@ bloków godzinowych („08:00<br>09:35”) i po komórce na datę z tabelą zaj�
 „Przedmiot - Prowadzący (Forma)”, skrót formy, sala, numer). `sources/ewig_plan.py` zamienia
 ją na plik w formacie eksportu — na stronie z 23.09.2026 wynik zgadzał się z eksportem 30/30.
 Gdy eksport zawodzi, plan pochodzi ze strony (notatka w logu); gdy działa, oba źródła są
-porównywane i rozbieżność trafia do logu. Rok dat: semestr zimowy — wrzesień–grudzień rok
+porównywane i rozbieżność trafia do logu. Siatka jest czytana od początku tabeli, w której
+stoi komórka dnia tygodnia (17.10.2026 wiersz dat poniedziałków przed tą komórką był pomijany
+i jedyne zajęcia w poniedziałek — BIM Ep 18.01 — znikały i wracały w kalendarzu). Gdy na
+stronie są zajęcia, których siatka nie przypisała do daty, plan ze strony nie zastępuje
+eksportu (błąd połączenia jak bez strony — tolerowany do doby), bo synchronizacja usunęłaby je. Rok dat: semestr zimowy — wrzesień–grudzień rok
 startu, styczeń–marzec następny; letni — rok następny.
 
 ## 12. Kilka planów (kalendarz na grupę)

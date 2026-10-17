@@ -67,13 +67,40 @@ class _Cell:
     html: str
 
 
+def _grid_table(page: str) -> str | None:
+    """Treść tabeli z siatką planu — tej, w której jest komórka dnia tygodnia (klasa *HTM0).
+
+    Cała tabela, od jej początku: wiersze i komórki przed pierwszą komórką dnia (np. wiersz
+    dat poniedziałków) też należą do siatki.
+    """
+    starts: list[int] = []  # początki treści otwartych tabel
+    grid_start: int | None = None
+    for m in TAG.finditer(page):
+        closing, name, attrs = m.group(1) == "/", m.group(2).lower(), m.group(3)
+        if name == "table":
+            if not closing:
+                starts.append(m.end())
+            elif starts:
+                start = starts.pop()
+                if start == grid_start:
+                    return page[start : m.start()]
+            continue
+        if grid_start is None and not closing and name == "td" and starts:
+            cls_match = CLASS_ATTR.search(attrs)
+            if cls_match and "SheTeaGrpHTM0" in cls_match.group(2):
+                grid_start = starts[-1]
+    return page[grid_start:] if grid_start is not None else None
+
+
 def _rows(page: str) -> list[list[_Cell]]:
-    """Wiersze tabeli z siatką planu (rozpoznawanej po komórce dnia tygodnia, klasa *HTM0).
+    """Wiersze tabeli z siatką planu.
 
     Komórki z zagnieżdżonymi tabelami (zajęcia) są zbierane w całości jako surowy HTML.
     """
+    table = _grid_table(page)
+    if table is None:
+        return []
     depth = 0
-    grid_depth: int | None = None
     rows: list[list[_Cell]] = []
     row: list[_Cell] | None = None
     cell_start: int | None = None
@@ -82,34 +109,15 @@ def _rows(page: str) -> list[list[_Cell]]:
     def close_cell(pos: int) -> None:
         nonlocal cell_start
         if row is not None and cell_start is not None:
-            row.append(_Cell(cell_cls, page[cell_start:pos]))
+            row.append(_Cell(cell_cls, table[cell_start:pos]))
         cell_start = None
 
-    for m in TAG.finditer(page):
+    for m in TAG.finditer(table):
         closing, name, attrs = m.group(1) == "/", m.group(2).lower(), m.group(3)
         if name == "table":
-            if closing:
-                if depth == grid_depth:
-                    close_cell(m.start())
-                    if row is not None:
-                        rows.append(row)
-                    return rows
-                depth -= 1
-            else:
-                depth += 1
+            depth += -1 if closing else 1
             continue
-        if name not in ("tr", "td", "th"):
-            continue
-        cls_match = CLASS_ATTR.search(attrs)
-        cls = cls_match.group(2) if cls_match else ""
-        if grid_depth is None:
-            if not closing and name == "td" and "SheTeaGrpHTM0" in cls:
-                grid_depth = depth
-                # Wiersz zaczął się wcześniej — od tego miejsca zbieramy jego komórki.
-                row = []
-            else:
-                continue
-        if depth != grid_depth:
+        if depth or name not in ("tr", "td", "th"):
             continue
         if name == "tr":
             close_cell(m.start())
@@ -122,8 +130,9 @@ def _rows(page: str) -> list[list[_Cell]]:
             close_cell(m.start())
             if row is None:
                 row = []
-            cell_start, cell_cls = m.end(), cls
-    close_cell(len(page))
+            cls_match = CLASS_ATTR.search(attrs)
+            cell_start, cell_cls = m.end(), cls_match.group(2) if cls_match else ""
+    close_cell(len(table))
     if row:
         rows.append(row)
     return rows
@@ -193,3 +202,25 @@ def grid_to_csv(events: list[GridEvent]) -> bytes:
         day = e.day.isoformat()
         writer.writerow([e.subject, e.room, day, e.start, day, e.end, "Fałsz", day, e.start])
     return out.getvalue().encode("cp1250")
+
+
+def missing_from_grid(page: str, events: list[GridEvent]) -> list[str]:
+    """Zajęcia ze strony, których siatka nie przypisała do daty i godziny.
+
+    Każde zajęcia na stronie to tabela z tytułem; brak którejś w wyniku `parse_plan_grid`
+    znaczy, że siatka jest odczytana niekompletnie i nie może zastąpić eksportu
+    (synchronizacja usunęłaby brakujące zajęcia z kalendarza).
+    """
+    remaining = [(e.course, e.kind, e.seq) for e in events]
+    missing = []
+    for table in re.findall(r"<table\b[^>]*\btitle\s*=.*?</table\s*>", page, re.S | re.I):
+        parsed = _cell_event(table)
+        if parsed is None:
+            continue
+        key = parsed[:3]
+        if key in remaining:
+            remaining.remove(key)
+        else:
+            course, kind, seq = key
+            missing.append(f"{course} ({kind}) [{seq}]")
+    return missing
