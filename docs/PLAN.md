@@ -338,7 +338,12 @@ porównywane i rozbieżność trafia do logu. Siatka jest czytana od początku t
 stoi komórka dnia tygodnia (17.10.2026 wiersz dat poniedziałków przed tą komórką był pomijany
 i jedyne zajęcia w poniedziałek — BIM Ep 18.01 — znikały i wracały w kalendarzu). Gdy na
 stronie są zajęcia, których siatka nie przypisała do daty, plan ze strony nie zastępuje
-eksportu (błąd połączenia jak bez strony — tolerowany do doby), bo synchronizacja usunęłaby je. Rok dat: semestr zimowy — wrzesień–grudzień rok
+eksportu (błąd połączenia jak bez strony — tolerowany do doby), bo synchronizacja usunęłaby je.
+3.11.2026 poniedziałki nadal zostawały bez dat (egzamin ATD 11.01), a eksport WIG23IX2S1
+zrywał się za każdym razem: wiersze zajęć sprzed pierwszego rozpoznanego wiersza dat dostają
+teraz daty wtorków z tych samych kolumn minus dzień. Przy niekompletnej siatce fragment strony
+z siatką (bez skryptów, z zamazanym identyfikatorem sesji, loginem i hasłem) trafia do artefaktu
+uruchomienia (`pages/<grupa>.html`) do dalszej diagnozy. Rok dat: semestr zimowy — wrzesień–grudzień rok
 startu, styczeń–marzec następny; letni — rok następny.
 
 ## 12. Kilka planów (kalendarz na grupę)

@@ -278,6 +278,11 @@ def run_auto(
     finally:
         for note in ewig.notes:
             log(f"ewig: {note}")
+        if save_dir is not None and ewig.incomplete_grids:
+            pages = save_dir / "pages"
+            pages.mkdir(parents=True, exist_ok=True)
+            for code, excerpt in ewig.incomplete_grids.items():
+                (pages / f"{code}.html").write_text(excerpt, "utf-8")
     fetched = {g.code: source for g, source in zip(groups, downloaded, strict=True)}
     if save_dir is not None:
         files = save_dir / "files"

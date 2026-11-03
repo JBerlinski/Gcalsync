@@ -430,6 +430,33 @@ def test_grid_reads_cells_before_first_weekday_cell():
     assert missing_from_grid(page, grid) == []
 
 
+def monday_header_variants():
+    from fake_ewig import plan_page
+
+    page = plan_page("X", MONDAY_PLAN)
+    first_row = page[page.index("<tr>") : page.index("</tr>") + len("</tr>")]
+    without_dates = re.sub(r'<td class="tdFormList1DDSheTeaGrpHTM3".*?</td>', "", first_row)
+    other_class = first_row.replace("tdFormList1DDSheTeaGrpHTM3", "tdFormList1DDSheTeaGrpHTM5")
+    return {
+        "bez wiersza dat": page.replace(first_row, "", 1),
+        "bez komórek dat": page.replace(first_row, without_dates, 1),
+        "inna klasa dat": page.replace(first_row, other_class, 1),
+    }
+
+
+@pytest.mark.parametrize("variant", ["bez wiersza dat", "bez komórek dat", "inna klasa dat"])
+def test_grid_monday_dates_follow_tuesdays(variant):
+    """3.11.2026: egzamin w poniedziałek 11.01 (a 17.10 BIM Ep 18.01) bez daty w siatce, więc
+    plan ze strony nie zastępował zepsutego eksportu. Bez rozpoznanego wiersza dat poniedziałków
+    ich daty to daty wtorków z tych samych kolumn minus dzień."""
+    from gcalsync.sources.ewig_plan import grid_to_csv, missing_from_grid, parse_plan_grid
+
+    page = monday_header_variants()[variant]
+    grid = parse_plan_grid(page, 20261)
+    assert same_events(grid_to_csv(grid), MONDAY_PLAN)
+    assert missing_from_grid(page, grid) == []
+
+
 def test_incomplete_grid_does_not_replace_export():
     """Zajęcia na stronie poza siatką: plan ze strony nie zastępuje eksportu (inaczej
     synchronizacja usunęłaby je z kalendarza) — zostaje błąd połączenia z ewig."""
@@ -453,3 +480,7 @@ def test_incomplete_grid_does_not_replace_export():
         "odczytana niekompletnie" in n and "Modelowanie danych do BIM (Ep) [1]" in n
         for n in c.notes
     )
+    # Fragment strony z siatką trafia do artefaktu uruchomienia, bez identyfikatora sesji.
+    excerpt = c.incomplete_grids["WIG23IX2S1"]
+    assert "SheTeaGrpHTM0" in excerpt and "Modelowanie danych do BIM" in excerpt
+    assert SID not in excerpt and "<script" not in excerpt
