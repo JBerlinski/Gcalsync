@@ -34,7 +34,7 @@ from gcalsync.core.rules import ExclusionRule, RuleError
 from gcalsync.gcal.auth import AuthError
 from gcalsync.gcal.client import CalendarApi, GoogleApiError
 from gcalsync.gcal.executor import ExecutionResult, Journal, execute_plan, verify
-from gcalsync.gcal.mapping import TIME_ZONE, event_body, event_times
+from gcalsync.gcal.mapping import TIME_ZONE, event_body, event_times, managed_key
 from gcalsync.sources.ewig import EwigClient, EwigGroup, fetch_sources, teacher_key
 from gcalsync.sources.outlook_csv import CsvFileSource
 from gcalsync.state import SyncState, next_state, save_state, short_key, split_state
@@ -213,9 +213,17 @@ def _plan(
         state, existing = split_state(api.list_events(calendar_id))
     # ewig zawsze daje pełny plan grupy, więc zakres synchronizacji zaczyna się od „teraz”, a nie
     # od pierwszych zajęć w pliku — inaczej zajęcia usunięte z początku planu by zostały.
+    # Z tego samego powodu sięga do ostatnich zarządzanych zajęć w kalendarzu: gdy plan skończy
+    # się wcześniej (np. zajęcia ze stycznia przeniesione na grudzień), stare zajęcia z końca
+    # znikają. Przed hurtowym usunięciem chroni bezpiecznik masowego usuwania.
     window = preview.coverage
     if window is not None:
-        window = (min(window[0], now), window[1])
+        managed_ends = [
+            times[1]
+            for g in existing
+            if managed_key(g) is not None and (times := event_times(g)) is not None
+        ]
+        window = (min(window[0], now), max([window[1], *managed_ends]))
     plan = plan_sync(
         _desired(config, preview, sources),
         existing,

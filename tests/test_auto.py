@@ -408,6 +408,26 @@ def test_class_removed_from_start_of_plan_is_deleted(config, api):
     ]
 
 
+def test_class_removed_from_end_of_plan_is_deleted(config, api):
+    """Tak jak 3.11.2026: zajęcia ze stycznia przeniesiono na grudzień, więc plan kończy się
+    wcześniej niż zajęcia, które już są w kalendarzu — te z końca też muszą zniknąć."""
+    run(config, api, apply=True)
+    late = (b"2027-01-27", b"2027-01-29")
+    shorter = b"".join(
+        line
+        for line in NEW_GROUP.read_bytes().splitlines(keepends=True)
+        if not any(day in line for day in late)
+    )
+    result = run(config, api, apply=True, files={**FILES, "WIG23IX2S1": shorter})
+    assert [d.reason for d in result.plan.deletes] == ["nieaktualne"] * 4
+    assert result.plan.kept_outside == []
+    assert not [
+        e
+        for e in classes(api, config.calendar.id)
+        if e["start"]["dateTime"][:10] in ("2027-01-27", "2027-01-29")
+    ]
+
+
 # --- awaria ewig: ponowienie po przerwie i tolerancja bez e-maila --------------------------
 
 
