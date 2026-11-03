@@ -23,7 +23,12 @@ from urllib.parse import urlencode, urlparse
 import requests
 
 from gcalsync.core.normalize import normalize_text
-from gcalsync.sources.ewig_plan import grid_to_csv, missing_from_grid, parse_plan_grid
+from gcalsync.sources.ewig_plan import (
+    grid_excerpt,
+    grid_to_csv,
+    missing_from_grid,
+    parse_plan_grid,
+)
 from gcalsync.sources.outlook_csv import CsvFileSource, parse_outlook_csv
 
 BASE_URL = "https://ewig.wcy.wat.edu.pl/ed2/"
@@ -221,6 +226,8 @@ class EwigClient:
         self._sleep = sleep
         self.sid: str | None = None
         self.notes: list[str] = []  # przebieg ponowień — do logu uruchomienia
+        # Siatki planu odczytane niekompletnie (grupa -> fragment strony) — do artefaktu.
+        self.incomplete_grids: dict[str, str] = {}
         self._referer: str | None = None
 
     def _get(self, url: str, step: str, *, retry: bool = True) -> requests.Response:
@@ -320,6 +327,9 @@ class EwigClient:
             if not grid:
                 raise
             if missing := missing_from_grid(plan, grid):
+                self.incomplete_grids[group] = grid_excerpt(
+                    plan, (self.sid, self._login, self._password)
+                )
                 self.notes.append(
                     f"Siatka planu grupy {group} na stronie odczytana niekompletnie (bez dat: "
                     f"{', '.join(missing[:5])}) — nie zastąpi eksportu."

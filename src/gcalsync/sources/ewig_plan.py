@@ -20,7 +20,7 @@ import html
 import io
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 TAG = re.compile(r"<(/?)([a-zA-Z]+)\b([^>]*)>")
 CLASS_ATTR = re.compile(r"""\bclass\s*=\s*(["']?)([^"'\s>]+)\1""", re.I)
@@ -159,10 +159,40 @@ def _cell_event(cell_html: str) -> tuple[str, str, int, str] | None:
     return course, kind.group(1).strip(), int(seq.group(1)), room_text
 
 
+def _monday_dates(tuesdays: list[date | None]) -> list[date | None] | None:
+    """Daty poniedziałków z wiersza dat wtorków (te same tygodnie, dzień wcześniej)."""
+    known = [d for d in tuesdays if d is not None]
+    if not known or any(d.weekday() != 1 for d in known):
+        return None
+    return [d - timedelta(days=1) if d else None for d in tuesdays]
+
+
 def parse_plan_grid(page: str, semester_iid: int) -> list[GridEvent]:
-    """Zajęcia z siatki planu grupy, posortowane chronologicznie (jak w eksporcie)."""
+    """Zajęcia z siatki planu grupy, posortowane chronologicznie (jak w eksporcie).
+
+    Wiersze zajęć przed pierwszym rozpoznanym wierszem dat (blok poniedziałków: 17.10
+    i 3.11.2026 zajęcia w poniedziałki zostawały bez dat) dostają daty z pierwszego wiersza
+    dat przesunięte o dzień, gdy to wtorki — kolumny każdego bloku to te same tygodnie.
+    """
     events: list[GridEvent] = []
     dates: list[date | None] = []
+    pending: list[list[_Cell]] = []  # wiersze zajęć sprzed pierwszego wiersza dat
+    seen_dates = False
+
+    def add(row: list[_Cell], row_dates: list[date | None]) -> None:
+        times = next((TIMES.search(c.html) for c in row if TIMES.search(c.html)), None)
+        slots = [c for c in row if c.cls.endswith("SheTeaGrpHTM3") and "DD" not in c.cls]
+        for day, cell in zip(row_dates, slots, strict=False):
+            if day is None or "<table" not in cell.html.lower():
+                continue
+            for inner in re.findall(r"<table\b.*?</table\s*>", cell.html, re.S | re.I):
+                parsed = _cell_event(inner)
+                if parsed:
+                    course, kind, seq, room = parsed
+                    events.append(
+                        GridEvent(course, kind, seq, room, day, times.group(1), times.group(2))
+                    )
+
     for row in _rows(page):
         header = [c for c in row if "DDSheTeaGrpHTM3" in c.cls]
         if header:
@@ -174,21 +204,20 @@ def parse_plan_grid(page: str, semester_iid: int) -> list[GridEvent]:
                     dates.append(date(_year(month, semester_iid), month, int(d.group(1))))
                 else:
                     dates.append(None)
+            if any(dates):
+                seen_dates = True
+            if pending and (mondays := _monday_dates(dates)) is not None:
+                for early in pending:
+                    add(early, mondays)
+                pending = []
             continue
-        times = next((TIMES.search(c.html) for c in row if TIMES.search(c.html)), None)
-        if times is None:
+        if not any(TIMES.search(c.html) for c in row):
             continue
-        slots = [c for c in row if c.cls.endswith("SheTeaGrpHTM3") and "DD" not in c.cls]
-        for day, cell in zip(dates, slots, strict=False):
-            if day is None or "<table" not in cell.html.lower():
-                continue
-            for inner in re.findall(r"<table\b.*?</table\s*>", cell.html, re.S | re.I):
-                parsed = _cell_event(inner)
-                if parsed:
-                    course, kind, seq, room = parsed
-                    events.append(
-                        GridEvent(course, kind, seq, room, day, times.group(1), times.group(2))
-                    )
+        if not any(dates):
+            if not seen_dates:
+                pending.append(row)
+            continue
+        add(row, dates)
     events.sort(key=lambda e: (e.day, e.start, e.subject))
     return events
 
@@ -224,3 +253,20 @@ def missing_from_grid(page: str, events: list[GridEvent]) -> list[str]:
             course, kind, seq = key
             missing.append(f"{course} ({kind}) [{seq}]")
     return missing
+
+
+def grid_excerpt(page: str, secrets: tuple[str, ...] = ()) -> str:
+    """Fragment strony z siatką planu (do diagnozy niekompletnego odczytu): od tabeli przed
+    pierwszą komórką siatki do końca ostatniej, bez skryptów i z zamazanymi `secrets`
+    (np. identyfikator sesji ewig). Nagłówek strony z danymi zalogowanego zostaje pominięty."""
+    first, last = page.find("SheTeaGrp"), page.rfind("SheTeaGrp")
+    if first < 0:
+        return ""
+    start = max(page.rfind("<table", 0, first), 0)
+    end = page.find("</table", last)
+    end = len(page) if end < 0 else min(len(page), end + 2000)
+    excerpt = re.sub(r"<script\b.*?</script\s*>", "", page[start:end], flags=re.S | re.I)
+    for secret in secrets:
+        if secret:
+            excerpt = excerpt.replace(secret, "***")
+    return excerpt
