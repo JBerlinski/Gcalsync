@@ -8,8 +8,11 @@ on:
     # uruchomienia z harmonogramu bywają opóźnione o kilka godzin albo pomijane — dlatego
     # każde uruchomienie synchronizuje (bez sprawdzania godziny). Przy braku zmian niczego
     # nie zapisuje.
+    # Minuta 17, nie pełna godzina: o :00 GitHub ma szczyt obciążenia i uruchomienia
+    # z harmonogramu najczęściej przepadają (31.10–3.11.2026 odbyło się ok. 9 z 21, np. 3.11
+    # żadne między 12:00 a 20:00).
     # Zapis z uruchomień cyklicznych tylko, gdy w gcalsync.config.json jest "auto_apply": true.
-    - cron: "0 4,5,10,11,16,17,22,23 * * *"
+    - cron: "17 4,5,10,11,16,17,22,23 * * *"
   workflow_dispatch:
     inputs:
       apply:
