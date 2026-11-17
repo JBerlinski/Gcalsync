@@ -16,9 +16,8 @@ Wszystkie polecenia uruchamiasz w katalogu repozytorium: `uv run gcalsync …`.
 
 ## Automatyzacja (GitHub Actions)
 
-Zadanie `.github/workflows/sync.yml` w okolicach 0:00, 6:00, 12:00 i 18:00 (czas polski; GitHub
-bywa spóźniony o kilka godzin) loguje się
-do ewig, pobiera plan grup (to samo co ikona eksportu „w formacie OutLook”), przepuszcza go
+Zadanie `.github/workflows/sync.yml` co 30 minut (GitHub część uruchomień z harmonogramu
+opóźnia albo pomija — patrz „Zewnętrzny wyzwalacz” niżej) loguje się do ewig, pobiera plan grup (to samo co ikona eksportu „w formacie OutLook”), przepuszcza go
 przez reguły i synchronizuje kalendarze planów. Nazwiska prowadzących są odczytywane
 ze strony planu grupy (eksport CSV ich nie zawiera). Konfiguracja bez sekretów:
 [`gcalsync.config.json`](gcalsync.config.json): semestr, szablon tytułu, `auto_apply` i lista
@@ -36,7 +35,7 @@ jego ID do `gcalsync.config.json` osobnym commitem. Nazwa kalendarza w Google je
 ustawiana zgodnie z polem `summary`. Kalendarz możesz udostępnić innym w ustawieniach
 Kalendarza Google („Udostępnij określonym osobom”).
 
-**Awaria ewig:** uruchomienie z harmonogramu ponawia pobieranie jeszcze dwa razy co 10 minut.
+**Awaria ewig:** uruchomienie z harmonogramu ponawia pobieranie jeszcze raz po 5 minutach.
 Jeśli ewig dalej nie działa, a ostatnia udana synchronizacja była mniej niż dobę temu,
 uruchomienie kończy się ostrzeżeniem ⚠️ (bez e-maila) i kolejne spróbuje ponownie. E-mail
 przychodzi dopiero, gdy kalendarz nie był synchronizowany od ponad doby.
@@ -51,6 +50,27 @@ a pobrane pliki i dziennik w artefakcie (7 dni).
 zajęć usuniętych ręcznie), historia uruchomień
 i podsumowania. `auto_apply` w `gcalsync.config.json` włącza zapis z uruchomień cyklicznych
 (do edycji także z telefonu).
+
+### Zewnętrzny wyzwalacz (zalecany)
+
+Harmonogram GitHuba jest zawodny: 8–17.11.2026 odbywało się ok. 2–3 z 8 zaplanowanych
+uruchomień dziennie, a 17.11 zmiana planu w ewig czekała na synchronizację ponad 9 godzin.
+Gęsty harmonogram (co 30 min) to łagodzi, a pewność daje zewnętrzny cron, który woła
+„Run workflow” przez API GitHuba:
+
+1. **GitHub → Settings → Developer settings → Fine-grained tokens → Generate new token:**
+   dostęp tylko do repozytorium `Gcalsync`, uprawnienie **Actions: Read and write** (nic więcej —
+   token nie pozwala zmieniać kodu). Zapamiętaj datę wygaśnięcia.
+2. **[cron-job.org](https://cron-job.org)** (darmowe) → nowe zadanie, np. co godzinę:
+   - URL: `https://api.github.com/repos/JBerlinski/Gcalsync/actions/workflows/sync.yml/dispatches`
+   - metoda `POST`, nagłówki `Authorization: Bearer <token>`,
+     `Accept: application/vnd.github+json`,
+   - treść: `{"ref": "main", "inputs": {"scheduled": "true"}}`.
+3. Odpowiedź `204` = uruchomiono. W Actions takie uruchomienie ma zdarzenie `workflow_dispatch`
+   i działa jak z harmonogramu: zapis tylko przy `"auto_apply": true`, tolerancja awarii ewig.
+
+Uruchomienia z obu źródeł mogą się nakładać — kolejka (`concurrency`) wykonuje je po kolei;
+czekające uruchomienie zastąpione nowszym GitHub oznacza jako anulowane, co jest niegroźne.
 
 ### Ręczne zmiany w kalendarzu
 
