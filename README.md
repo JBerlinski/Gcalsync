@@ -72,6 +72,21 @@ Gęsty harmonogram (co 30 min) to łagodzi, a pewność daje zewnętrzny cron, k
 Uruchomienia z obu źródeł mogą się nakładać — kolejka (`concurrency`) wykonuje je po kolei;
 czekające uruchomienie zastąpione nowszym GitHub oznacza jako anulowane, co jest niegroźne.
 
+### Odświeżanie EWIGLookup
+
+Gdy synchronizacja zmieni zajęcia w kalendarzu, zadanie od razu uruchamia „Aktualizacja planów”
+w repozytorium EWIGLookup (zakładki z planami naszych grup czytają te kalendarze). Bez zmian
+w kalendarzu nic nie uruchamia. Potrzebny jest sekret `EWIGLOOKUP_TOKEN` — `GITHUB_TOKEN`
+nie może uruchamiać workflow w innym repozytorium:
+
+1. **GitHub → Settings → Developer settings → Fine-grained tokens → Generate new token:**
+   repozytoria `EWIGLookup` i `Gcalsync`, uprawnienie **Actions: Read and write** (nic więcej).
+   Ten sam token może służyć zewnętrznemu wyzwalaczowi z sekcji wyżej.
+2. **Gcalsync → Settings → Secrets and variables → Actions → New repository secret:**
+   `EWIGLOOKUP_TOKEN` = token.
+
+Bez sekretu krok kończy się ostrzeżeniem, a strona odświeży się z własnego harmonogramu.
+
 ### Ręczne zmiany w kalendarzu
 
 Zajęcia w kalendarzach planów można zmieniać bezpośrednio w Kalendarzu Google (także z telefonu),
@@ -101,6 +116,7 @@ ręczne zmiany i usunięcia są wypisane w podsumowaniu uruchomienia.
    - `EWIG_LOGIN`, `EWIG_PASSWORD` — dane do ewig,
    - `GOOGLE_TOKEN_JSON` — cała zawartość `%LOCALAPPDATA%\gcalsync\token.json`
      (PowerShell: `Get-Content $env:LOCALAPPDATA\gcalsync\token.json | Set-Clipboard`).
+   - `EWIGLOOKUP_TOKEN` — token z sekcji „Odświeżanie EWIGLookup” (opcjonalny).
 4. Workflow musi być na gałęzi domyślnej (`main`) — harmonogram i przycisk „Run workflow”
    działają tylko stamtąd.
 5. Pierwsze uruchomienie ręcznie, bez zapisu. Gdy podsumowanie się zgadza, ustaw

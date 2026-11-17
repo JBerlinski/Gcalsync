@@ -59,6 +59,7 @@ jobs:
           uv sync --frozen --no-dev
 
       - name: Synchronizacja
+        id: sync
         env:
           EWIG_LOGIN: ${{ secrets.EWIG_LOGIN }}
           EWIG_PASSWORD: ${{ secrets.EWIG_PASSWORD }}
@@ -72,7 +73,7 @@ jobs:
           # uruchomienie i tak jest za ok. pół godziny); awaria krótsza niż doba od ostatniej
           # udanej synchronizacji nie jest błędem (bez e-maila).
           OUTAGE: ${{ (github.event_name == 'schedule' || inputs.scheduled == true) && '--ewig-retries 1 --ewig-retry-wait 300 --tolerate-ewig-outage 24' || '' }}
-        run: uv run --frozen --no-dev gcalsync auto $MODE $MASS $RESTORE $OUTAGE --save-dir run-output --summary "$GITHUB_STEP_SUMMARY"
+        run: uv run --frozen --no-dev gcalsync auto $MODE $MASS $RESTORE $OUTAGE --save-dir run-output --summary "$GITHUB_STEP_SUMMARY" --outputs "$GITHUB_OUTPUT"
 
       - name: Zapis ID nowego kalendarza w konfiguracji
         if: always()
@@ -87,6 +88,22 @@ jobs:
           done
           echo "::error::Nie udało się zapisać ID kalendarza w repozytorium — dopisz je ręcznie."
           exit 1
+
+      # Gdy zajęcia w kalendarzu się zmieniły, od razu odśwież stronę EWIGLookup (zakładki
+      # z planami naszych grup czytają te kalendarze). Token z innego repozytorium jest potrzebny,
+      # bo GITHUB_TOKEN nie może uruchamiać workflow w EWIGLookup — patrz README.
+      - name: Odświeżenie strony EWIGLookup
+        if: always() && steps.sync.outputs.changed == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.EWIGLOOKUP_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::Brak sekretu EWIGLOOKUP_TOKEN — strona EWIGLookup odświeży się dopiero z własnego harmonogramu."
+            exit 0
+          fi
+          gh workflow run pages.yml -R JBerlinski/EWIGLookup
+          echo "Uruchomiono „Aktualizacja planów” w EWIGLookup." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Pliki z ewig i dziennik (7 dni)
         if: always()

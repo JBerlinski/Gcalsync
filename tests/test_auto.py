@@ -214,6 +214,21 @@ def test_cli_apply_if_enabled_respects_config(cli_env, api, capsys, tmp_path):
     assert api.writes == 76  # 75 zajęć + zdarzenie ze stanem (lista usuniętych ręcznie)
 
 
+def test_cli_outputs_changed_only_after_calendar_write(cli_env, api, tmp_path):
+    outputs = tmp_path / "outputs"
+    args = ["auto", "--config", str(cli_env), "--outputs", str(outputs)]
+    assert cli.main(args, sleep=lambda _s: None) == 0  # dry-run
+    assert outputs.read_text("utf-8") == "changed=false\n"
+
+    outputs.unlink()
+    assert cli.main([*args, "--apply"], sleep=lambda _s: None) == 0
+    assert outputs.read_text("utf-8") == "changed=true\n"
+
+    outputs.unlink()
+    assert cli.main([*args, "--apply"], sleep=lambda _s: None) == 0  # już zgodny
+    assert outputs.read_text("utf-8") == "changed=false\n"
+
+
 def test_cli_errors_are_reported_with_exit_3(monkeypatch, cli_env, tmp_path, capsys):
     monkeypatch.setattr(cli, "EwigClient", EwigClient)  # prawdziwy klient, brak sekretów
     monkeypatch.delenv("EWIG_LOGIN", raising=False)

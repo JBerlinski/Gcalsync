@@ -285,6 +285,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PLIK",
         help="dopisz podsumowanie Markdown (np. $GITHUB_STEP_SUMMARY)",
     )
+    auto.add_argument(
+        "--outputs",
+        type=Path,
+        metavar="PLIK",
+        help="dopisz wynik jako klucz=wartość (np. $GITHUB_OUTPUT): "
+        "changed=true, gdy zmieniono zajęcia w kalendarzu",
+    )
 
     # settings
     settings = sub.add_parser("settings", help="pokaż lub zmień ustawienia")
@@ -721,6 +728,9 @@ def cmd_auto(args: argparse.Namespace, ctx: Context) -> int:
     if args.summary:
         with args.summary.open("a", encoding="utf-8") as f:
             f.write(markdown_summary(result))
+    if args.outputs:
+        with args.outputs.open("a", encoding="utf-8") as f:
+            f.write(f"changed={'true' if result.calendar_changed else 'false'}\n")
     return result.exit_code
 
 

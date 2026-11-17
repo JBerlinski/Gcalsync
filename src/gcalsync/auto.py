@@ -186,6 +186,12 @@ class AutoResult:
     plans: list[AutoResult] = field(default_factory=list)  # wyniki planów (wynik zbiorczy)
     calendar_created: str | None = None  # ID kalendarza utworzonego w tym uruchomieniu
 
+    @property
+    def calendar_changed(self) -> bool:
+        """Czy uruchomienie zmieniło zajęcia w którymś kalendarzu (choćby częściowo)."""
+        results = self.plans or [self]
+        return any(r.execution is not None and r.execution.done > 0 for r in results)
+
 
 def _desired(config: AutoConfig, preview: PreviewResult, sources: list[CsvFileSource]):
     teachers = {source.id: source.teachers for source in sources}
