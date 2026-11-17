@@ -26,6 +26,10 @@ on:
         description: "Przywróć zajęcia usunięte ręcznie z kalendarza (razem z zapisem)"
         type: boolean
         default: false
+      refresh_ewiglookup:
+        description: "Odśwież stronę EWIGLookup także bez zmian w kalendarzu (np. test tokenu)"
+        type: boolean
+        default: false
       scheduled:
         description: "Jak uruchomienie z harmonogramu (zapis wg auto_apply, tolerancja awarii ewig) — dla zewnętrznego wyzwalacza"
         type: boolean
@@ -93,17 +97,23 @@ jobs:
       # z planami naszych grup czytają te kalendarze). Token z innego repozytorium jest potrzebny,
       # bo GITHUB_TOKEN nie może uruchamiać workflow w EWIGLookup — patrz README.
       - name: Odświeżenie strony EWIGLookup
-        if: always() && steps.sync.outputs.changed == 'true'
+        if: always() && (steps.sync.outputs.changed == 'true' || inputs.refresh_ewiglookup == true)
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.EWIGLOOKUP_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "::warning::Brak sekretu EWIGLOOKUP_TOKEN — strona EWIGLookup odświeży się dopiero z własnego harmonogramu."
+            echo "⚠️ EWIGLookup: brak sekretu EWIGLOOKUP_TOKEN." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          gh workflow run pages.yml -R JBerlinski/EWIGLookup
-          echo "Uruchomiono „Aktualizacja planów” w EWIGLookup." >> "$GITHUB_STEP_SUMMARY"
+          if gh workflow run pages.yml -R JBerlinski/EWIGLookup; then
+            echo "✅ Uruchomiono „Aktualizacja planów” w EWIGLookup." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Nie udało się uruchomić EWIGLookup — token EWIGLOOKUP_TOKEN wygasł albo nie ma uprawnienia Actions: write do EWIGLookup."
+            echo "❌ EWIGLookup: token EWIGLOOKUP_TOKEN wygasł albo nie ma uprawnień (Actions: Read and write)." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Pliki z ewig i dziennik (7 dni)
         if: always()

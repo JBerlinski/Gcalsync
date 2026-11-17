@@ -86,6 +86,12 @@ nie może uruchamiać workflow w innym repozytorium:
    `EWIGLOOKUP_TOKEN` = token.
 
 Bez sekretu krok kończy się ostrzeżeniem, a strona odświeży się z własnego harmonogramu.
+Test tokenu: „Run workflow” z zaznaczonym „Odśwież stronę EWIGLookup…” — w podsumowaniu
+pojawi się ✅ albo ❌. Wygasły token nie psuje synchronizacji kalendarzy (tylko ❌ w podsumowaniu).
+
+**Ważność tokenu:** przy tworzeniu (lub „Regenerate token” dla istniejącego) w polu
+*Expiration* wybierz „No expiration”, a jeśli go nie ma — „Custom” z najdalszą datą. Po
+regeneracji wklej nową wartość do sekretu `EWIGLOOKUP_TOKEN`.
 
 ### Ręczne zmiany w kalendarzu
 
