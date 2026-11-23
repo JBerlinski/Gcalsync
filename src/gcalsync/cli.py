@@ -277,6 +277,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="przywróć zajęcia usunięte ręcznie z kalendarza (działa razem z zapisem)",
     )
     auto.add_argument(
+        "--reset",
+        action="store_true",
+        help="doprowadź kalendarz dokładnie do stanu z planu: przywróć wszystkie usunięte ręcznie "
+        "zajęcia i nadpisz ręczne zmiany (działa razem z zapisem)",
+    )
+    auto.add_argument(
+        "--plan",
+        action="append",
+        metavar="NAZWA",
+        help="synchronizuj tylko ten plan (można powtórzyć); bez tej opcji — wszystkie plany "
+        "poza oznaczonymi „manual_only” (tylko na żądanie)",
+    )
+    auto.add_argument(
         "--save-dir", type=Path, metavar="KATALOG", help="zapisz pobrane pliki i dziennik"
     )
     auto.add_argument(
@@ -673,7 +686,7 @@ def cmd_sync(args: argparse.Namespace, ctx: Context) -> int:
 
 
 def cmd_auto(args: argparse.Namespace, ctx: Context) -> int:
-    config = load_auto_config(args.config)
+    config = load_auto_config(args.config).select(args.plan)
     apply = args.apply or (args.apply_if_enabled and config.auto_apply)
     if args.apply_if_enabled and not config.auto_apply:
         print("Zapis wyłączony w konfiguracji (auto_apply = false) — tylko dry-run.\n")
@@ -693,6 +706,7 @@ def cmd_auto(args: argparse.Namespace, ctx: Context) -> int:
                     apply=apply,
                     allow_mass_delete=args.allow_mass_delete,
                     restore_deleted=args.restore_deleted,
+                    reset=args.reset,
                     save_dir=args.save_dir,
                     sleep=ctx.sleep,
                 )

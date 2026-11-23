@@ -80,13 +80,18 @@ def test_repo_config_is_valid():
     assert [g.code for g in config.groups] == ["WIG23IX2S1", "WIG23IX1S1"]
     assert config.semester_iid == 20261
     assert config.auto_apply is True  # włączone po udanym dry-runie i ręcznym zapisie
-    first, second = config.plans
+    first, second, personal = config.plans
     assert (first.name, first.calendar.summary) == ("WIG23IX2S1", "WIG23IX2S1")
     assert [g.code for g in first.groups] == ["WIG23IX2S1", "WIG23IX1S1"]
     assert first.rules[0].value == "Modelowanie danych do BIM"
     assert (second.name, second.calendar.summary) == ("WIG23IX1S1", "WIG23IX1S1")
     assert [g.code for g in second.groups] == ["WIG23IX1S1"]
     assert second.rules == []  # BIM zostaje w planie grupy WIG23IX1S1
+    # Osobisty kalendarz: zawartość jak WIG23IX2S1, synchronizowany tylko na żądanie.
+    assert (personal.name, personal.calendar.summary) == ("PLAN WAT", "PLAN WAT")
+    assert personal.manual_only and not first.manual_only and not second.manual_only
+    assert personal.groups == first.groups and personal.rules == first.rules
+    assert [p.name for p in config.select().plans] == ["WIG23IX2S1", "WIG23IX1S1"]
 
 
 def test_dry_run_writes_nothing(config, api):
@@ -616,3 +621,178 @@ def test_old_single_calendar_config_still_loads(tmp_path):
     path.write_text(json.dumps(old), "utf-8")
     [plan] = load_auto_config(path).plans
     assert plan.calendar.id == "x@group.calendar.google.com"
+
+
+# --- PLAN WAT: osobisty kalendarz tylko na żądanie, z resetem -----------------------------
+
+
+@pytest.fixture
+def personal(api, tmp_path):
+    """Konfiguracja z repozytorium: dwa plany grup (z kalendarzami) i PLAN WAT bez kalendarza."""
+    first = api.create_calendar("WIG23IX2S1", "Europe/Warsaw", "x")
+    second = api.create_calendar("WIG23IX1S1", "Europe/Warsaw", "x")
+    ids = {"WIG23IX2S1": first["id"], "WIG23IX1S1": second["id"], "PLAN WAT": None}
+    path = tmp_path / "gcalsync.config.json"
+    path.write_text(json.dumps(repo_data(ids)), "utf-8")
+    return path
+
+
+def personal_cli(monkeypatch, api, path, *extra):
+    monkeypatch.setattr(cli, "EwigClient", lambda login, password: ewig_client())
+    monkeypatch.setattr(cli, "GoogleCalendarApi", lambda credentials: api)
+    monkeypatch.setattr(cli, "credentials_from_json", lambda token: None)
+    return cli.main(["auto", "--config", str(path), *extra], sleep=lambda _s: None)
+
+
+def personal_calendar(path) -> str | None:
+    data = json.loads(path.read_text("utf-8"))
+    return next(p for p in data["plans"] if p["name"] == "PLAN WAT")["calendar"]["id"]
+
+
+def test_regular_run_skips_manual_only_plan(monkeypatch, personal, api, tmp_path):
+    summary = tmp_path / "s.md"
+    assert personal_cli(monkeypatch, api, personal, "--apply", "--summary", str(summary)) == 0
+    assert len(api.calendars) == 2  # PLAN WAT nie został utworzony
+    assert personal_calendar(personal) is None
+    assert "PLAN WAT" not in summary.read_text("utf-8")
+
+
+def test_outage_tolerance_ignores_manual_only_plan(monkeypatch, personal, api):
+    """Rzadko synchronizowany PLAN WAT nie może zamieniać awarii ewig w błąd (e-mail)."""
+    assert personal_cli(monkeypatch, api, personal, "--apply") == 0
+    assert personal_cli(monkeypatch, api, personal, "--plan", "PLAN WAT", "--apply") == 0
+    monkeypatch.setattr(cli, "EwigClient", lambda login, password: down_ewig())
+    later = lambda: TODAY + timedelta(hours=5)  # noqa: E731
+    # Ostatnia synchronizacja PLAN WAT dawno temu — nie wpływa na zwykłe uruchomienia.
+    for cal in api.calendars:
+        for e in api.events[cal].values():
+            if is_state_event(e) and cal == personal_calendar(personal):
+                e["extendedProperties"]["private"]["last_ok"] = "2026-01-01T00:00:00+00:00"
+    code = cli.main(
+        ["auto", "--config", str(personal), "--apply", "--tolerate-ewig-outage", "24"],
+        sleep=lambda _s: None,
+        now=later,
+    )
+    assert code == 0
+
+
+def test_plan_option_creates_personal_calendar_with_same_content(monkeypatch, personal, api):
+    assert personal_cli(monkeypatch, api, personal, "--plan", "PLAN WAT", "--apply") == 0
+    created = personal_calendar(personal)
+    assert created and api.calendars[created]["summary"] == "PLAN WAT"
+    assert len(api.calendars) == 3
+    first = load_auto_config(personal).plans[0].calendar.id
+    assert classes(api, first) == []  # plany grup nietknięte
+    assert len(classes(api, created)) == 75
+    assert courses(api, created) == {
+        "Analizy teledetekcyjne",
+        "Geowizualizacja",
+        "Seminarium dyplomowe",
+    }
+
+
+def test_unknown_plan_is_usage_error(monkeypatch, personal, api, capsys):
+    assert personal_cli(monkeypatch, api, personal, "--plan", "Nie ma") == 2
+    out = capsys.readouterr()
+    assert "Nieznany plan" in out.err + out.out
+
+
+@pytest.fixture
+def wat(api, personal, monkeypatch):
+    """PLAN WAT po pierwszym zapisie (konfiguracja z ID kalendarza)."""
+    assert personal_cli(monkeypatch, api, personal, "--plan", "PLAN WAT", "--apply") == 0
+    return load_auto_config(personal).select(["PLAN WAT"])
+
+
+def test_without_reset_deletions_since_last_sync_are_kept(wat, api):
+    event = find(api, wat, *SEMINAR)
+    del api.events[wat.calendar.id][event["id"]]
+    result = run(wat, api, apply=True)
+    assert result.plan.adds == [] and len(result.plan.newly_deleted) == 1
+
+
+def test_reset_restores_deletions_and_overwrites_manual_changes(wat, api):
+    calendar = wat.calendar.id
+    # Usunięcie od ostatniej synchronizacji (wykrywane przez `seen`) i jedno wcześniejsze.
+    del api.events[calendar][find(api, wat, *SEMINAR)["id"]]
+    run(wat, api, apply=True)
+    lecture = next(e for e in classes(api, calendar) if e["summary"].endswith("(w)"))
+    del api.events[calendar][lecture["id"]]
+    # Ręczne zmiany: przeniesienie i notatka.
+    moved = next(e for e in classes(api, calendar) if e["summary"].startswith("Geowizualizacja"))
+    move(moved, "2026-12-24T08:00", "2026-12-24T09:35")
+    other = next(e for e in classes(api, calendar) if e is not moved)
+    other["description"] = "Moja notatka"
+    assert len(classes(api, calendar)) == 73
+
+    dry = run(wat, api, apply=False, reset=True)
+    assert len(dry.plan.adds) == 2  # usunięte przed ostatnim zapisem i po nim
+    assert len(dry.plan.updates) == 2  # przeniesione wraca na miejsce, notatka znika
+    assert api.events[calendar][other["id"]]["description"] == "Moja notatka"
+
+    result = run(wat, api, apply=True, reset=True)
+    assert result.exit_code == EXIT_OK, result.headline
+    assert result.remaining == []
+    assert result.plan.manual_keeps == [] and result.plan.deleted_by_user == []
+    assert result.plan.deletes == []
+    assert len(classes(api, calendar)) == 75
+    assert not api.events[calendar][moved["id"]]["start"]["dateTime"].startswith("2026-12-24")
+    assert api.events[calendar][other["id"]]["description"] != "Moja notatka"
+    assert "🔄 Reset" in markdown_summary(result)
+
+    again = run(wat, api, apply=True)  # zwykły zapis po resecie: nic do zrobienia
+    assert again.plan.operation_count == 0 and again.plan.deleted_by_user == []
+
+
+def test_reset_from_cli(monkeypatch, personal, wat, api):
+    del api.events[wat.calendar.id][find(api, wat, *SEMINAR)["id"]]
+    args = ["--plan", "PLAN WAT", "--apply", "--reset"]
+    assert personal_cli(monkeypatch, api, personal, *args) == 0
+    assert find(api, wat, *SEMINAR)
+
+
+@pytest.mark.parametrize(
+    ("plan", "message"),
+    [
+        ({"content_from": "Nie ma"}, "nieznany plan"),
+        ({"content_from": "PLAN WAT"}, "nieznany plan"),
+        ({"content_from": "WIG23IX2S1", "groups": []}, "wyklucza"),
+        ({"content_from": "Inny"}, "sam używa"),
+    ],
+)
+def test_invalid_content_from(tmp_path, plan, message):
+    data = repo_data({"WIG23IX2S1": None})
+    data["plans"] += [
+        {"name": "PLAN WAT", "calendar": {"summary": "PLAN WAT"}} | plan,
+        {"name": "Inny", "content_from": "WIG23IX2S1", "calendar": {"summary": "Inny"}},
+    ]
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(data), "utf-8")
+    with pytest.raises(ConfigError, match=message):
+        load_auto_config(path)
+
+
+def test_only_manual_plans_without_selection_is_error(tmp_path):
+    data = repo_data({"WIG23IX2S1": None})
+    data["plans"][0]["manual_only"] = True
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(data), "utf-8")
+    config = load_auto_config(path)
+    with pytest.raises(ConfigError, match="na żądanie"):
+        config.select()
+    assert config.select(["WIG23IX2S1"]).plans == config.plans
+
+
+def test_reset_deletes_manually_moved_class_removed_from_plan(config, api):
+    run(config, api, apply=True)
+    move(find(api, config, *SEMINAR), "2026-10-02T12:00", "2026-10-02T13:35")
+    run(config, api, apply=True)
+    without = b"".join(
+        line
+        for line in DEFAULT_GROUP.read_bytes().splitlines(keepends=True)
+        if not line.startswith(b"Seminarium dyplomowe (S) [1],")
+    )
+    result = run(config, api, apply=True, files={**FILES, "WIG23IX1S1": without}, reset=True)
+    assert result.plan.manual_keeps == []
+    [delete] = result.plan.deletes
+    assert delete.reason == "nieaktualne"
