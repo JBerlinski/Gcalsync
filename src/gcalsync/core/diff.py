@@ -184,11 +184,15 @@ def plan_sync(
     deleted_keys: Collection[str] = (),
     seen_keys: Collection[str] = (),
     key_id: Callable[[str], str] = lambda key: key,
+    keep_manual: bool = True,
 ) -> SyncPlan:
     """Plan zmian. `deleted_keys` — zajęcia usunięte ręcznie wcześniej, `seen_keys` — zajęcia
     obecne w kalendarzu po poprzednim zapisie (brak takiego teraz = usunięte ręcznie);
-    oba w postaci `key_id(klucz)`."""
+    oba w postaci `key_id(klucz)`. `keep_manual=False` nadpisuje ręczne zmiany planem
+    (przeniesione ręcznie zajęcia spoza planu są usuwane jak zwykłe nieaktualne)."""
     plan = SyncPlan(now=now, window=window)
+    with_manual = _with_manual if keep_manual else lambda body, _existing: (body, [])
+    manual_groups = _manual_groups if keep_manual else lambda _existing: []
     deleted, seen = set(deleted_keys), set(seen_keys)
 
     by_key: dict[str, list[GoogleEvent]] = {}
@@ -215,7 +219,7 @@ def plan_sync(
         if key in desired_by_key:
             continue
         for g in group:
-            if "czas" in _manual_groups(g):
+            if "czas" in manual_groups(g):
                 sig = (private_props(g).get(PROP_COURSE), event_times(g))
                 movable.setdefault(sig, []).append(g)
     adopted_ids: set[str] = set()
@@ -239,14 +243,14 @@ def plan_sync(
                 plan.adds.append(PlannedAdd(event, body))
                 continue
             adopted_ids.add(match["id"])
-            merged, manual = _with_manual(body, match)
+            merged, manual = with_manual(body, match)
             plan.updates.append(
                 PlannedUpdate(event, merged, match, _changes(merged, match), manual, adopted=True)
             )
             continue
         # Preferuj egzemplarz, który już ma docelową treść (bez ręcznych zmian, potem z nimi);
         # pozostałe to duplikaty.
-        merged_all = [(g, *_with_manual(body, g)) for g in candidates]
+        merged_all = [(g, *with_manual(body, g)) for g in candidates]
         keeper, merged, manual = next(
             (m for m in merged_all if not _changes(body, m[0])),
             next((m for m in merged_all if not _changes(m[1], m[0])), merged_all[0]),
@@ -276,7 +280,7 @@ def plan_sync(
             times = event_times(g)
             if times is None or not _in_scope(times, window, now):
                 plan.kept_outside.append(g)
-            elif manual := _manual_groups(g):
+            elif manual := manual_groups(g):
                 plan.manual_keeps.append(ManualKeep(g, manual, "zmienione ręcznie, brak w planie"))
             else:
                 plan.deletes.append(PlannedDelete(g, "nieaktualne"))

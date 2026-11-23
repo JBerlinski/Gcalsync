@@ -5,6 +5,10 @@ grupy (w kolejności priorytetu), reguły wykluczeń i kalendarz. Każda grupa j
 z ewig raz, nawet jeśli korzysta z niej kilka planów. Kalendarz planu bez ID jest tworzony
 przy pierwszym zapisie, a jego ID dopisywane do pliku konfiguracji.
 
+Plan może przejąć grupy i reguły innego planu (`"content_from"`), a plan z `"manual_only": true`
+jest pomijany przez zwykłe (cykliczne) uruchomienia — synchronizuje się tylko po wskazaniu go
+wprost (`--plan`).
+
 Konfiguracja bez sekretów leży w repozytorium (gcalsync.config.json). Sekrety przychodzą
 ze zmiennych środowiskowych: EWIG_LOGIN, EWIG_PASSWORD, GOOGLE_TOKEN_JSON.
 
@@ -18,8 +22,8 @@ from __future__ import annotations
 import json
 import tempfile
 import time
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -67,6 +71,7 @@ class PlanConfig:
     groups: list[EwigGroup]  # kolejność = priorytet
     rules: list[ExclusionRule]
     calendar: PlanCalendar
+    manual_only: bool = False  # tylko na żądanie (--plan), nie w uruchomieniach cyklicznych
 
 
 @dataclass
@@ -77,6 +82,25 @@ class AutoConfig:
     title_template: str
     auto_apply: bool  # czy zaplanowane uruchomienia mogą zapisywać
     path: Path | None = None  # plik konfiguracji — tu trafia ID nowo utworzonego kalendarza
+
+    def select(self, names: Sequence[str] | None = None) -> AutoConfig:
+        """Konfiguracja tylko z wybranymi planami.
+
+        Bez nazw — plany zwykłe (bez `manual_only`), czyli to, co synchronizują uruchomienia
+        cykliczne. Z nazwami — dokładnie te plany (także `manual_only`), w kolejności z pliku.
+        """
+        if not names:
+            plans = [p for p in self.plans if not p.manual_only]
+            if not plans:
+                raise ConfigError("Wszystkie plany w konfiguracji są tylko na żądanie (--plan).")
+            return replace(self, plans=plans)
+        known = {p.name for p in self.plans}
+        unknown = [n for n in names if n not in known]
+        if unknown:
+            raise ConfigError(
+                f"Nieznany plan: {', '.join(unknown)} (dostępne: {', '.join(sorted(known))})."
+            )
+        return replace(self, plans=[p for p in self.plans if p.name in names])
 
     @property
     def groups(self) -> list[EwigGroup]:
@@ -106,13 +130,28 @@ def _groups(items: list[dict]) -> list[EwigGroup]:
     return groups
 
 
-def _plan_config(data: dict) -> PlanConfig:
+def _plan_config(data: dict, all_plans: list[dict] | None = None) -> PlanConfig:
     calendar = data["calendar"]
+    content = data
+    if (source := data.get("content_from")) is not None:
+        if "groups" in data or "rules" in data:
+            raise ConfigError(
+                f"Plan {data['name']}: „content_from” wyklucza własne „groups” i „rules”."
+            )
+        content = next((p for p in all_plans or [] if p.get("name") == source), None)
+        if content is None or source == data["name"]:
+            raise ConfigError(f"Plan {data['name']}: nieznany plan w „content_from”: {source!r}.")
+        if "content_from" in content:
+            raise ConfigError(
+                f"Plan {data['name']}: plan {source} sam używa „content_from” — wskaż plan "
+                "z własnymi grupami."
+            )
     return PlanConfig(
         name=data["name"],
-        groups=_groups(data["groups"]),
-        rules=[rule_from_dict(r) for r in data.get("rules", [])],
+        groups=_groups(content["groups"]),
+        rules=[rule_from_dict(r) for r in content.get("rules", [])],
         calendar=PlanCalendar(id=calendar.get("id") or None, summary=calendar["summary"]),
+        manual_only=bool(data.get("manual_only", False)),
     )
 
 
@@ -135,7 +174,7 @@ def load_auto_config(path: Path) -> AutoConfig:
                 )
             ]
         elif version == 2:
-            plans = [_plan_config(plan) for plan in data["plans"]]
+            plans = [_plan_config(plan, data["plans"]) for plan in data["plans"]]
         else:
             raise ConfigError(f"Nieobsługiwana wersja {path.name}: {version!r}")
         if not plans:
@@ -185,6 +224,7 @@ class AutoResult:
     name: str = ""  # nazwa planu (wynik jednego planu)
     plans: list[AutoResult] = field(default_factory=list)  # wyniki planów (wynik zbiorczy)
     calendar_created: str | None = None  # ID kalendarza utworzonego w tym uruchomieniu
+    reset: bool = False  # kalendarz doprowadzany do stanu z planu (bez ręcznych zmian i usunięć)
 
     @property
     def calendar_changed(self) -> bool:
@@ -212,8 +252,13 @@ def _plan(
     calendar_id: str | None,
     now: datetime,
     deleted: set[str] | None = None,
+    reset: bool = False,
 ) -> tuple[SyncPlan, SyncState, list[dict[str, Any]]]:
-    """Plan zmian dla kalendarza (`calendar_id=None` — kalendarz jeszcze nie istnieje)."""
+    """Plan zmian dla kalendarza (`calendar_id=None` — kalendarz jeszcze nie istnieje).
+
+    `reset` — kalendarz ma wyglądać dokładnie jak plan: bez zapamiętanych usunięć (także tych
+    sprzed ostatniego zapisu, wykrywanych przez `seen`) i bez zachowywania ręcznych zmian.
+    """
     state, existing = SyncState(), []
     if calendar_id is not None:
         state, existing = split_state(api.list_events(calendar_id))
@@ -235,9 +280,10 @@ def _plan(
         existing,
         window,
         now,
-        deleted_keys=set(state.deleted) if deleted is None else deleted,
-        seen_keys=state.seen,
+        deleted_keys=set() if reset else set(state.deleted) if deleted is None else deleted,
+        seen_keys=set() if reset else state.seen,
         key_id=short_key,
+        keep_manual=not reset,
     )
     return plan, state, existing
 
@@ -267,12 +313,16 @@ def run_auto(
     apply: bool,
     allow_mass_delete: bool = False,
     restore_deleted: bool = False,
+    reset: bool = False,
     save_dir: Path | None = None,
     now: Callable[[], datetime] = lambda: clock.now(),
     sleep: Callable[[float], None] = time.sleep,
     log: Callable[[str], None] = print,
 ) -> AutoResult:
     """Jedno uruchomienie: pobranie grup z ewig i synchronizacja kolejnych planów.
+
+    `reset` — każdy kalendarz zostaje doprowadzony dokładnie do stanu z planu: wracają wszystkie
+    zajęcia usunięte ręcznie, a ręczne zmiany (termin, sala, tytuł, opis) są nadpisywane.
 
     Wyjątki ewig propagują do wywołującego (ponowienia i tolerancja są w CLI). Błąd Google
     lub konfiguracji jednego planu nie zatrzymuje pozostałych.
@@ -327,7 +377,8 @@ def run_auto(
                 google,
                 apply=apply,
                 allow_mass_delete=allow_mass_delete,
-                restore_deleted=restore_deleted,
+                restore_deleted=restore_deleted or reset,
+                reset=reset,
                 save_dir=save_dir,
                 now=now,
                 sleep=sleep,
@@ -401,6 +452,7 @@ def _run_plan(
     apply: bool,
     allow_mass_delete: bool,
     restore_deleted: bool,
+    reset: bool,
     save_dir: Path | None,
     now: Callable[[], datetime],
     sleep: Callable[[float], None],
@@ -423,15 +475,20 @@ def _run_plan(
         calendar_id,
         started,
         deleted=set() if restore_deleted else None,
+        reset=reset,
     )
     shown = (
         CalendarConfig(id=calendar_id, summary=plan_config.calendar.summary)
         if calendar_id
         else None
     )
+    if reset:
+        log("Reset: ręczne zmiany i usunięcia nie są zachowywane — kalendarz = plan.")
     log(render_sync_text(SyncPreview(preview, plan, shown), apply=apply))
 
-    result = AutoResult(EXIT_OK, "", preview=preview, plan=plan, calendar_created=created)
+    result = AutoResult(
+        EXIT_OK, "", preview=preview, plan=plan, calendar_created=created, reset=reset
+    )
     if plan.operation_count == 0:
         result.headline = "Kalendarz jest zgodny z planem — brak zmian."
         if apply:
@@ -458,7 +515,7 @@ def _run_plan(
         short_key(e.key) for e in plan.newly_deleted
     }
     after, _, events_after = _plan(
-        config, preview, sources, api, calendar_id, now(), deleted=deleted_now
+        config, preview, sources, api, calendar_id, now(), deleted=deleted_now, reset=reset
     )
     remaining = verify(after)
     result.state_saved = _save_state(
@@ -573,6 +630,11 @@ def _plan_markdown(result: AutoResult, limit: int) -> list[str]:
     lines = [result.headline, ""]
     if result.calendar_created:
         lines += [f"Utworzono kalendarz (ID: `{result.calendar_created}`).", ""]
+    if result.reset:
+        lines += [
+            "🔄 Reset: wszystkie zajęcia usunięte ręcznie wracają, ręczne zmiany są nadpisywane.",
+            "",
+        ]
     p, plan = result.preview, result.plan
     if p is not None:
         lines.append(

@@ -28,6 +28,10 @@ i regułami wykluczeń:
 |---|---|---|
 | WIG23IX2S1 | WIG23IX2S1, potem WIG23IX1S1 | Modelowanie danych do BIM |
 | WIG23IX1S1 | WIG23IX1S1 | — |
+| PLAN WAT | jak WIG23IX2S1 (`"content_from"`) | jak WIG23IX2S1 |
+
+PLAN WAT to osobisty kalendarz z `"manual_only": true`: zadanie cykliczne i zewnętrzny wyzwalacz
+go pomijają, synchronizuje się tylko na żądanie — patrz „Kalendarz PLAN WAT” niżej.
 
 Każda grupa jest pobierana z ewig raz, nawet gdy korzysta z niej kilka planów. Plan bez ID
 kalendarza (`"id": null`) dostaje nowy kalendarz przy pierwszym zapisie, a automat dopisuje
@@ -93,6 +97,25 @@ pojawi się ✅ albo ❌. Wygasły token nie psuje synchronizacji kalendarzy (ty
 *Expiration* wybierz „No expiration”, a jeśli go nie ma — „Custom” z najdalszą datą. Po
 regeneracji wklej nową wartość do sekretu `EWIGLOOKUP_TOKEN`.
 
+### Kalendarz PLAN WAT (na żądanie)
+
+Osobisty kalendarz z tymi samymi zajęciami co WIG23IX2S1 (grupy i reguły przejmuje przez
+`"content_from": "WIG23IX2S1"`), z którego usuwasz zajęcia, na które nie chodzisz. Synchronizuje
+się **tylko** z osobnego zadania: Actions → „Synchronizacja PLAN WAT (na żądanie)” → „Run workflow”.
+Opcje:
+
+- **Zapisz zmiany** (domyślnie włączone) — odznaczone = tylko dry-run.
+- **Wyzeruj kalendarz** (domyślnie włączone) — kalendarz staje się dokładnie planem: wracają
+  wszystkie zajęcia usunięte ręcznie (także te usunięte od ostatniej synchronizacji), a ręczne
+  przeniesienia, zmiany sali, tytułu i opisu są nadpisywane. Odznaczone = zwykła synchronizacja
+  z zachowaniem usunięć i ręcznych zmian (zasady jak w sekcji niżej).
+- **Pozwól na zapis mimo bezpiecznika** — jak w głównym zadaniu.
+
+Kalendarz powstaje przy pierwszym zapisie, a jego ID trafia do `gcalsync.config.json` osobnym
+commitem. Lokalnie: `uv run gcalsync auto --plan "PLAN WAT" --apply --reset`.
+Zadanie ma własną kolejkę, więc częste uruchomienia „Synchronizacji planu” go nie anulują,
+i nie odświeża EWIGLookup (strona nie czyta tego kalendarza).
+
 ### Ręczne zmiany w kalendarzu
 
 Zajęcia w kalendarzach planów można zmieniać bezpośrednio w Kalendarzu Google (także z telefonu),
@@ -103,8 +126,10 @@ a synchronizacja tych zmian nie cofa:
   przy zajęciach z własną notatką w opisie). Gdy dziekanat wpisze do planu dokładnie ten
   termin, na który zajęcia przeniesiono ręcznie, zdarzenie znów jest zwykłym zdarzeniem z planu.
   Przywrócenie wartości z planu też kończy ochronę.
-- **Usunięcie** — usunięte zajęcia nie są dodawane ponownie. Przywrócenie wszystkich:
-  „Run workflow” z zaznaczonymi opcjami zapisu i „Przywróć zajęcia usunięte ręcznie”.
+- **Usunięcie** — usunięte zajęcia nie są dodawane ponownie. Przywrócenie:
+  „Run workflow” z zaznaczonymi opcjami zapisu i „Przywróć zajęcia usunięte ręcznie” (wracają
+  zajęcia, których usunięcie wykryła już wcześniejsza synchronizacja; w CLI `--reset` przywraca
+  wszystkie i nadpisuje też ręczne zmiany).
 - **Zajęcia przeniesione ręcznie, których nie ma już w planie**, zostają w kalendarzu.
 - **Własne wydarzenia** dodane do kalendarza planu nigdy nie są ruszane.
 
