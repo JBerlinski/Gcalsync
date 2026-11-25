@@ -40,4 +40,12 @@ for m in set(re.findall(r"""<script[^>]*src\s*=\s*["']([^"']+)""", plan + home))
 for m in re.finditer(r"<select\b.*?</select>", plan, re.S | re.I):
     opts = re.findall(r"<option[^>]*value\s*=\s*[\"']?([^\"' >]*)[^>]*>([^<]*)", m.group(0))
     print("SELECT", len(opts), [o for o in opts if re.search(TEACHER, o[1], re.I)][:5], opts[:5])
+for m in re.finditer(r"sheduleKind", plan):
+    print("SK", scrub(plan[max(0,m.start()-300):m.end()+300]).replace("\n"," "))
+for m in re.finditer(r"<form\b.*?>|<input\b[^>]*>", plan, re.S | re.I):
+    print("FORM", scrub(m.group(0))[:300])
+for m in re.finditer(r"<script\b[^>]*>(.*?)</script>", plan, re.S | re.I):
+    body = scrub(m.group(1)).strip()
+    if body and "Incapsula" not in body[:200]:
+        print("JS", len(body), body[:4000].replace("\n", " "))
 c.logout()
