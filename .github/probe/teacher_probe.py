@@ -36,7 +36,7 @@ def show(page, label):
     grid = parse_plan_grid(page, SEM)
     print("grid events:", len(grid))
     for ev in grid:
-        if str(ev.start)[:10] in DATES or str(getattr(ev, "date", ""))[:10] in DATES:
+        if str(ev.day) in DATES:
             print("  EV", ev)
     if not grid:
         titles = re.findall(r'title="([^"]*\([A-Za-zżźćńółęąś]+\))"', page)
