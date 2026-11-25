@@ -42,27 +42,27 @@ def show(page, label):
         titles = re.findall(r'title="([^"]*\([A-Za-zżźćńółęąś]+\))"', page)
         print("titles sample:", titles[:10])
 
-for mid, name in ((327, "nauczyciel"), (294, "sala")):
+for mid, fn in ((327, "showPersonPlan"), (294, "showRoomPlan")):
     page = get(menu(mid), f"menu {mid}")
-    print(f"=== MENU {mid} ({name}) len {len(page)}")
-    needle = TEACHER if mid == 327 else "17"
-    hits = [m.start() for m in re.finditer(needle, page)]
-    print("hits", len(hits))
-    for h in hits[:3]:
-        print("CTX", scrub(page[max(0, h - 500):h + 150]).replace("\n", " "))
-    # funkcje JS wywoływane z listy
-    print("FUNCS", sorted(set(re.findall(r"javascript:(\w+)\(", page)))[:30])
-    if mid == 327 and hits:
-        h = hits[0]
-        window = page[max(0, h - 500):h + 150]
-        args = re.findall(r"\w+\(\s*'?([^'),]+)'?\s*[,)]", window)
-        print("ARGS", args[-5:])
-        for exv in reversed(args[-3:]):
-            try:
-                p = get(plan_url(mid, exv.strip()), f"plan {exv}")
-            except Exception as exc:
-                print("ERR", exv, exc); continue
-            if TEACHER in p:
-                show(p, f"PLAN nauczyciela exv={exv}")
-                break
+    for m in re.finditer(fn, page):
+        print("USE", fn, scrub(page[max(0, m.start()-200):m.end()+300]).replace("\n", " "))
+        break
+    for m in re.finditer(r"function\s+" + fn + r"\b.*?\n\s*\}", page, re.S):
+        print("DEF", scrub(m.group(0))[:1500])
+    for m in re.finditer(r"<script[^>]*src\s*=\s*[\"']([^\"']+)", page):
+        print("SRC", m.group(1))
+    for m in re.finditer(r"<select\b[^>]*>", page):
+        print("SELECT", m.group(0)[:200])
+    if mid == 294:
+        opts = re.findall(r'<option\s+value="(\d+)"[^>]*>([^<]*)</option>', page)
+        print("ROOM OPTS 17*:", [(v, t) for v, t in opts if t.strip().startswith("17")][:20])
+        print("ROOM OPTS count", len(opts), opts[:3], opts[-3:])
+
+p = get(plan_url(327, "1863"), "plan 1863")
+print("TEACHER IN PAGE", TEACHER in p, "len", len(p))
+show(p, "PLAN nauczyciela exv=1863")
+grid = parse_plan_grid(p, SEM)
+for ev in grid:
+    if ev.day.isoformat() >= "2026-11-30" and ev.day.isoformat() <= "2026-12-24" and ev.day.weekday() == 2:
+        print("  WED", ev.day, ev.start, ev.end, ev.course, ev.kind, ev.seq, ev.room)
 c.logout()
