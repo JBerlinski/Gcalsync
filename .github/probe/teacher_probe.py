@@ -1,8 +1,12 @@
-"""Jednorazowy zwiad: jak w ewig otworzyć plan prowadzącego (nie do scalenia z main)."""
-import os, re, sys
+"""Jednorazowy zwiad: plan prowadzącego i sali w ewig (nie do scalenia z main)."""
+import os, re
+from urllib.parse import urlencode
 from gcalsync.sources import ewig as E
+from gcalsync.sources.ewig_plan import parse_plan_grid
 
 TEACHER = os.environ.get("TEACHER", "Jenerowicz")
+DATES = ("2026-12-02", "2026-12-23")
+SEM = 20261
 c = E.EwigClient(os.environ["EWIG_LOGIN"], os.environ["EWIG_PASSWORD"])
 sid = c.login()
 secrets = [sid, os.environ["EWIG_LOGIN"], os.environ["EWIG_PASSWORD"]]
@@ -13,39 +17,52 @@ def scrub(s):
             s = s.replace(x, "<X>")
     return s
 
+def menu(mid):
+    ss = E.checksum(str(mid), str(SEM))
+    q = [("sid", sid), ("mid", str(mid)), ("iid", str(SEM)), ("vrf", f"!{ss}"), ("rdo", "1"), ("pos", "0")]
+    return E.BASE_URL + "logged.php?" + urlencode(q, safe="!")
+
+def plan_url(mid, exv):
+    q = [*E._base_query(sid, mid, SEM), ("exv", exv)]
+    ss = E.checksum(str(mid), str(SEM), exv)
+    q += [("vrf", f"!{ss}"), ("rdo", "1"), ("pos", "0")]
+    return E.BASE_URL + "logged.php?" + urlencode(q, safe="!")
+
 def get(url, step):
     return c._text(c._get(url, step))
 
-home = get(c._referer, "home")
-print("HOMEURL", scrub(c._referer))
-print("=== HOME len", len(home))
-# Pozycje menu: wywołania JS z etykietami
-for m in re.finditer(r"""(executeCmm\w*|exeCmm\w*|callFunction|showPlan|ownData)\(([^)]*)\)[^>]*>(.*?)</""", home, re.S | re.I):
-    label = re.sub(r"<[^>]+>|\s+", " ", m.group(3)).strip()
-    print("MENU", m.group(1), m.group(2), "|", label[:80])
-for m in re.finditer(r"var\s+(_\w+)\s*=\s*(\d+)", home):
-    print("VAR", m.group(1), m.group(2))
+def show(page, label):
+    print(f"=== {label}: len {len(page)}")
+    grid = parse_plan_grid(page, SEM)
+    print("grid events:", len(grid))
+    for ev in grid:
+        if str(ev.start)[:10] in DATES or str(getattr(ev, "date", ""))[:10] in DATES:
+            print("  EV", ev)
+    if not grid:
+        titles = re.findall(r'title="([^"]*\([A-Za-zżźćńółęąś]+\))"', page)
+        print("titles sample:", titles[:10])
 
-plan = get(E.group_plan_url(sid, 20261, "WIG23IX2S1"), "plan")
-print("=== PLAN len", len(plan))
-for m in re.finditer(TEACHER, plan):
-    a = max(0, m.start() - 400); b = m.end() + 200
-    print("CTX", scrub(plan[a:b]).replace("\n", " "))
-    break
-# Wszystkie onclick / href z logged.php i funkcje JS z „teach”/„prow”
-for m in set(re.findall(r"""on\w+\s*=\s*["']([^"']{0,200})["']""", plan)):
-    print("ONCLICK", scrub(m)[:200])
-for m in set(re.findall(r"""<script[^>]*src\s*=\s*["']([^"']+)""", plan + home)):
-    print("SCRIPT", m)
-for m in re.finditer(r"<select\b.*?</select>", plan, re.S | re.I):
-    opts = re.findall(r"<option[^>]*value\s*=\s*[\"']?([^\"' >]*)[^>]*>([^<]*)", m.group(0))
-    print("SELECT", len(opts), [o for o in opts if re.search(TEACHER, o[1], re.I)][:5], opts[:5])
-for m in re.finditer(r"sheduleKind", plan):
-    print("SK", scrub(plan[max(0,m.start()-300):m.end()+300]).replace("\n"," "))
-for m in re.finditer(r"<form\b.*?>|<input\b[^>]*>", plan, re.S | re.I):
-    print("FORM", scrub(m.group(0))[:300])
-for m in re.finditer(r"<script\b[^>]*>(.*?)</script>", plan, re.S | re.I):
-    body = scrub(m.group(1)).strip()
-    if body and "Incapsula" not in body[:200]:
-        print("JS", len(body), body[:4000].replace("\n", " "))
+for mid, name in ((327, "nauczyciel"), (294, "sala")):
+    page = get(menu(mid), f"menu {mid}")
+    print(f"=== MENU {mid} ({name}) len {len(page)}")
+    needle = TEACHER if mid == 327 else "17"
+    hits = [m.start() for m in re.finditer(needle, page)]
+    print("hits", len(hits))
+    for h in hits[:3]:
+        print("CTX", scrub(page[max(0, h - 500):h + 150]).replace("\n", " "))
+    # funkcje JS wywoływane z listy
+    print("FUNCS", sorted(set(re.findall(r"javascript:(\w+)\(", page)))[:30])
+    if mid == 327 and hits:
+        h = hits[0]
+        window = page[max(0, h - 500):h + 150]
+        args = re.findall(r"\w+\(\s*'?([^'),]+)'?\s*[,)]", window)
+        print("ARGS", args[-5:])
+        for exv in reversed(args[-3:]):
+            try:
+                p = get(plan_url(mid, exv.strip()), f"plan {exv}")
+            except Exception as exc:
+                print("ERR", exv, exc); continue
+            if TEACHER in p:
+                show(p, f"PLAN nauczyciela exv={exv}")
+                break
 c.logout()
